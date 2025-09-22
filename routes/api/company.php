@@ -1,0 +1,97 @@
+<?php
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+
+/*
+|--------------------------------------------------------------------------
+| API Routes
+|--------------------------------------------------------------------------
+|
+| Here is where you can register API routes for your application. These
+| routes are loaded by the RouteServiceProvider and all of them will
+| be assigned to the "api" middleware group. Make something great!
+|
+*/
+
+Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
+    return $request->user();
+});
+
+Route::post('login', 'AccountController@login');
+Route::post('verifyMobile', 'AccountController@verifyMobile');
+Route::post('resendOtp', 'AccountController@resendOtp');
+
+//Product
+Route::get('categories', 'ProductController@categories');
+Route::get('featured_categories', 'ProductController@featured_categories');
+Route::any('product', 'ProductController@product');
+
+Route::group(['middelware' => 'auth:sanctum'], function () {
+    Route::group(['middleware' => 'verification'], function () {
+        Route::get('banners', 'ProfileController@banners');
+        Route::any('products', 'ProductController@products');
+        Route::get('logout', 'AccountController@logout');
+        Route::get('profile', 'ProfileController@getProfile');
+        Route::get('dashboard', 'ProfileController@dashboard');
+        Route::post('profile/update', 'ProfileController@updateProfile');
+        Route::post('updateProfilePic', 'ProfileController@updateProfilePic');
+        Route::post('addProduct', 'ServiceController@addProduct');
+        Route::get('myProducts', 'ServiceController@myProducts');
+        Route::post('requestService', 'ServiceController@requestService');
+        Route::get('service', 'ServiceController@service');
+        Route::post('service/update', 'ServiceController@updateService');
+
+        Route::get('myServices', 'ServiceController@myServices');
+        Route::get('packages', 'ServiceController@packages');
+        Route::post('subscription', 'ServiceController@subscription');
+        Route::get('subscriptions', 'ServiceController@subscriptions');
+
+        Route::get('customers', 'ProfileController@customers');
+        Route::post('customers/store', 'ProfileController@add_customer');
+        Route::post('customers/update', 'ProfileController@update_customer');
+
+        Route::get('staff', 'ProfileController@staff');
+        Route::post('staff/store', 'ProfileController@add_staff');
+        Route::post('staff/update', 'ProfileController@update_staff');
+
+        Route::get('leads', 'LeadController@leads');
+        Route::post('lead/update', 'LeadController@update');
+
+        Route::get('roles', 'ProfileController@roles');
+
+        Route::post('deliveryLocation', 'ProfileController@deliveryLocation');
+        Route::get('my_locations', 'ProfileController@my_locations');
+        Route::post('deleteLocation', 'ProfileController@deleteLocation');
+        Route::get('firebase_token', 'ProfileController@firebase_token');
+
+        //Wishlist
+        Route::post('addWishList', 'WishListController@wish_list');
+        Route::get('myWishList', 'WishListController@my_wishlist');
+        //Cart
+        Route::post('addToCart', 'CartController@add_to_cart');
+        Route::post('myCart', 'CartController@myCart');
+        Route::post('removeFromCart', 'CartController@removeCart');
+        Route::post('update_cart', 'CartController@update_cart');
+        Route::any('cartTotal', 'CartController@cartTotal');
+        Route::get('clearCart', 'CartController@clearCart');
+        //Orders
+        Route::post('placeOrder', 'OrderController@order_placed');
+        Route::get('myOrders', 'OrderController@myOrders');
+        //Payments
+        Route::post('payAmount', "PaymentController@payAmount");
+        //Coupons
+        Route::get('allCoupons', 'CouponController@allCoupons');
+        Route::post('apply', 'CouponController@apply');
+
+        Route::get('notifications', 'SettingController@getNotification');
+
+    });
+});
+//setting
+// Route::get('banners', 'SettingController@banners');
+Route::get('pages', 'SettingController@pages');
+Route::get('settings', 'SettingController@settings');
+Route::get('sitesettings', 'SettingController@sitesettings');
+Route::get('states', 'SettingController@states');
+Route::get('cities', 'SettingController@cities');
