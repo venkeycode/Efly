@@ -213,15 +213,29 @@ public function getBalance(Request $request, $address)
     //     return response()->json($out);
     // }
 
-    public function showPayPage(Request $r)
-    {
-        $userId = $r->query('user_id');
-        $amount = $r->query('amount');
-        $return = $r->query('return');
-        $savedWallet = DB::table('customdetails')->where('uid', $userId)->value('wallet_address');
-        return view('website.pay', compact('userId','amount','return','savedWallet'));
-    }
+    // public function showPayPage(Request $r)
+    // {
+    //     $userId = $r->query('user_id');
+    //     $amount = $r->query('amount');
+    //     $return = $r->query('return');
+    //     $savedWallet = DB::table('customdetails')->where('uid', $userId)->value('wallet_address');
+    //     return view('website.pay', compact('userId','amount','return','savedWallet'));
+    // }
+public function showPayPage(Request $r)
+{
+    $userId = $r->query('user_id');
+    $amount = $r->query('amount');
+    $return = $r->query('return');
 
+    // pick token/receiver from env (or hardcode if you prefer)
+    $token = env('USDT_CONTRACT', '0x55d398326f99059fF775485246999027B3197955'); // BSC USDT default
+    $receiver = env('RECEIVER_WALLET', '0xYourReceiverWalletHere');
+
+    $savedWallet = DB::table('customdetails')->where('uid', $userId)->value('wallet_address');
+
+    // pass token & receiver to view
+    return view('website.pay', compact('userId','amount','return','savedWallet','token','receiver'));
+}
     /**
      * ✅ Verify ERC20 (USDT) payment
      */
