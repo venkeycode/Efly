@@ -227,13 +227,13 @@ public function showPayPage(Request $r)
     $amount = $r->query('amount');
     $return = $r->query('return');
 
-    // pick token/receiver from env (or hardcode if you prefer)
-    $token = env('USDT_CONTRACT', '0x55d398326f99059fF775485246999027B3197955'); // BSC USDT default
-    $receiver = env('RECEIVER_WALLET', '0xYourReceiverWalletHere');
+    $savedWallet = DB::table('customdetails')
+        ->where('uid', $userId)
+        ->value('wallet_address');
 
-    $savedWallet = DB::table('customdetails')->where('uid', $userId)->value('wallet_address');
+    $token = env('USDT_CONTRACT');        // e.g. Polygon USDT contract
+    $receiver = env('RECEIVER_WALLET');   // your receiver wallet
 
-    // pass token & receiver to view
     return view('website.pay', compact('userId','amount','return','savedWallet','token','receiver'));
 }
     /**
