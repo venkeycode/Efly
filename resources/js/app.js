@@ -13,7 +13,16 @@ const RPC_MAP = {
   1: "https://rpc.ankr.com/eth"
 };
 
-// Minimal ERC20 ABI
+/* BSC chain params for wallet_addEthereumChain fallback */
+const BSC_PARAMS = {
+  chainId: "0x38", // 56
+  chainName: "BNB Smart Chain",
+  nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+  rpcUrls: ["https://bsc-dataseed.binance.org/"],
+  blockExplorerUrls: ["https://bscscan.com"]
+};
+
+/* Minimal ERC-20 ABI */
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
@@ -24,13 +33,13 @@ const ERC20_ABI = [
 /**
  * State
  */
-let wcProvider = null;     // WalletConnect raw provider
-let provider = null;       // ethers BrowserProvider
+let wcProvider = null;
+let provider = null;
 let signer = null;
 let connectedAddress = null;
 
 /**
- * DOM elements (populated on DOMContentLoaded)
+ * DOM refs (populated in DOMContentLoaded)
  */
 let walletAddrEl = null;
 let walletBalanceEl = null;
@@ -38,25 +47,6 @@ let statusEl = null;
 let payBtn = null;
 let reconnectBtn = null;
 
-/**
- * Helpers
- */
-function setStatus(text, isError = false) {
-  if (!statusEl) return;
-  statusEl.innerText = `Status: ${text}`;
-  statusEl.style.color = isError ? "crimson" : "";
-}
-function normalize(a='') { try { return (a||'').toLowerCase(); } catch { return String(a).toLowerCase(); } }
-function getUsdtForChain(chainId) {
-  if (chainId === 56) return "0x55d398326f99059fF775485246999027B3197955"; // BSC USDT (18)
-  if (chainId === 137) return "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon USDT (6)
-  if (chainId === 1) return "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // ETH USDT (6)
-  return null;
-}
-
-/**
- * Initialize DOM refs once page loads
- */
 function initDom() {
   walletAddrEl = document.getElementById("walletAddr");
   walletBalanceEl = document.getElementById("walletBalance");
@@ -65,12 +55,24 @@ function initDom() {
   reconnectBtn = document.getElementById("reconnectBtn");
 }
 
+function setStatus(text, isError = false) {
+  if (!statusEl) return;
+  statusEl.innerText = `Status: ${text}`;
+  statusEl.style.color = isError ? "crimson" : "";
+}
+function normalize(a='') { try { return (a||'').toLowerCase(); } catch { return String(a).toLowerCase(); } }
+
+function getUsdtForChain(chainId) {
+  if (chainId === 56) return "0x55d398326f99059fF775485246999027B3197955"; // BSC USDT (18)
+  if (chainId === 137) return "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon USDT (6)
+  if (chainId === 1) return "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // ETH USDT (6)
+  return null;
+}
+
 /**
- * Create & init WalletConnect provider
- * showQrModal: boolean -> whether to open QR (true) or try silent restore (false)
+ * Initialize WalletConnect provider object via ESM package (Vite bundles it).
  */
 async function initWcProvider({ showQrModal = false } = {}) {
-  // Use the CHAIN_IDS constant so the config is consistent
   const cfg = {
     projectId: PROJECT_ID,
     chains: CHAIN_IDS,
@@ -78,41 +80,68 @@ async function initWcProvider({ showQrModal = false } = {}) {
     rpcMap: RPC_MAP,
     optionalChains: [137, 1]
   };
-
-  // init() returns object with enable()
-  const ethProv = await EthereumProvider.init(cfg);
-  return ethProv;
+  return await EthereumProvider.init(cfg);
 }
 
 /**
- * Try to restore an existing WalletConnect session silently (no QR).
- * If success, sets provider/signer/connectedAddress and updates UI.
+ * Ensure wallet (provider) is on target chain (try switch, then add if necessary).
+ */
+async function ensureChain(targetChainId = 56) {
+  if (!provider) return;
+  try {
+    const net = await provider.getNetwork();
+    const current = Number(net?.chainId || 0);
+    if (current === targetChainId) return; // already on correct chain
+
+    // Try switch
+    await provider.send("wallet_switchEthereumChain", [{ chainId: "0x" + targetChainId.toString(16) }]);
+    // success -> now on target chain
+    return;
+  } catch (err) {
+    // If switch failed because chain not added, try adding (example BSC)
+    try {
+      if (targetChainId === 56) {
+        await provider.send("wallet_addEthereumChain", [BSC_PARAMS]);
+        return;
+      }
+    } catch (addErr) {
+      console.warn("ensureChain add failed:", addErr);
+      throw addErr;
+    }
+    throw err;
+  }
+}
+async function ensureBsc() { return ensureChain(56); }
+
+/**
+ * Restore existing WalletConnect session silently (no QR).
  */
 export async function restoreSession() {
   setStatus("restoring session...");
   try {
     wcProvider = await initWcProvider({ showQrModal: false });
-    // enable resolves only if session exists
-    await wcProvider.enable();
+    await wcProvider.enable(); // resolves only if session exists
 
     provider = new ethers.BrowserProvider(wcProvider);
     signer = await provider.getSigner();
     connectedAddress = await signer.getAddress();
+
+    // Attempt to switch to BSC automatically (user will be prompted in wallet if needed)
+    try { await ensureBsc(); } catch(e){ console.warn("could not ensure BSC:", e); }
 
     if (walletAddrEl) walletAddrEl.innerText = connectedAddress;
     setStatus("connected: " + connectedAddress);
     if (payBtn) payBtn.disabled = false;
     if (reconnectBtn) reconnectBtn.style.display = "none";
 
-    // start balance refresh and listen for blocks
     await refreshBalance();
     try { provider.on("block", () => refreshBalance()); } catch(e){}
 
-    // check saved wallet mismatch (if blade provided SAVED_WALLET)
+    // Validate saved wallet match (if provided)
     if (window.SAVED_WALLET) {
       const saved = normalize(window.SAVED_WALLET);
       if (normalize(connectedAddress) !== saved) {
-        setStatus("Connected account differs from saved wallet", true);
+        setStatus("Connected address differs from saved wallet", true);
         if (payBtn) payBtn.disabled = true;
       }
     }
@@ -128,7 +157,7 @@ export async function restoreSession() {
 }
 
 /**
- * Open WalletConnect QR for fresh connect
+ * Open WalletConnect QR modal for fresh connect
  */
 export async function openConnectQr() {
   setStatus("opening WalletConnect QR...");
@@ -140,12 +169,15 @@ export async function openConnectQr() {
     signer = await provider.getSigner();
     connectedAddress = await signer.getAddress();
 
+    // Attempt chain switch to BSC
+    try { await ensureBsc(); } catch(e){ console.warn("could not ensure BSC after connect:", e); }
+
     if (walletAddrEl) walletAddrEl.innerText = connectedAddress;
     setStatus("connected: " + connectedAddress);
     if (payBtn) payBtn.disabled = false;
     if (reconnectBtn) reconnectBtn.style.display = "none";
 
-    // optionally save connected wallet to server (if user_id present)
+    // Optionally save to backend if USER_ID available
     try {
       if (window.USER_ID) {
         const csrf = document.querySelector('meta[name="csrf-token"]').content;
@@ -155,29 +187,28 @@ export async function openConnectQr() {
           body: JSON.stringify({ wallet_address: connectedAddress, user_id: window.USER_ID })
         });
       }
-    } catch (e) {
-      console.warn("Failed to save wallet to server:", e);
-    }
+    } catch (e) { console.warn("save wallet to server failed:", e); }
 
     await refreshBalance();
     try { provider.on("block", () => refreshBalance()); } catch(e){}
+
     return connectedAddress;
   } catch (err) {
-    console.error("openConnectQr error:", err);
+    console.error("openConnectQr failed:", err);
     setStatus("connect failed: " + (err.message || err), true);
     throw err;
   }
 }
 
 /**
- * Connect flow (explicit) - calls QR and returns address
+ * Public connect wrapper used by Blade: connectWalletConnect()
  */
 export async function connectWalletConnect() {
   return await openConnectQr();
 }
 
 /**
- * Robust refreshBalance: reads native balance and token (USDT) safely
+ * Robust refreshBalance: native + USDT token
  */
 export async function refreshBalance() {
   try {
@@ -186,19 +217,19 @@ export async function refreshBalance() {
       return;
     }
 
-    // Native balance
+    // native
     let nativeDisplay = "—";
     try {
       const balWei = await provider.getBalance(connectedAddress);
       const network = await provider.getNetwork();
-      const nativeSymbol = network.chainId === 56 ? "BNB" : network.chainId === 137 ? "MATIC" : network.chainId === 1 ? "ETH" : "NATIVE";
+      const nativeSymbol = network.chainId === 56 ? "BNB" : network.chainId === 137 ? "MATIC" : network.chainId === 1 ? "ETH" : `NATIVE(${network.chainId})`;
       nativeDisplay = parseFloat(ethers.formatEther(balWei)).toFixed(6) + " " + nativeSymbol;
     } catch (err) {
       console.warn("native read failed:", err);
       nativeDisplay = "Error";
     }
 
-    // Token (auto-detect USDT per chain)
+    // token
     let tokenDisplay = "—";
     try {
       const network = await provider.getNetwork();
@@ -214,7 +245,7 @@ export async function refreshBalance() {
         } else {
           const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
 
-          // decimals safe
+          // decimals (safe)
           let decimals = 18;
           try { decimals = Number(await token.decimals()) || decimals; } catch (e) {
             if (chainId === 137 || chainId === 1) decimals = 6;
@@ -222,9 +253,11 @@ export async function refreshBalance() {
             console.warn("decimals fallback used:", decimals, e);
           }
 
-          let symbol = "TOKEN";
-          try { symbol = await token.symbol(); } catch (e){}
+          // symbol (safe)
+          let symbol = "USDT";
+          try { const s = await token.symbol(); if (s) symbol = s; } catch (e) {}
 
+          // balanceOf (safe)
           let raw = null;
           try { raw = await token.balanceOf(connectedAddress); } catch (e) { raw = null; console.warn("balanceOf failed:", e); }
 
@@ -249,7 +282,7 @@ export async function refreshBalance() {
 }
 
 /**
- * payWithToken: detect token by chain, check balances, check gas, send transfer and call server verify.
+ * Pay with token (USDT) — user signs the token transfer
  */
 export async function payWithToken() {
   try {
@@ -262,7 +295,7 @@ export async function payWithToken() {
     const chainId = Number(net.chainId);
     const tokenAddress = getUsdtForChain(chainId) || window.USDT_CONTRACT;
     if (!tokenAddress) {
-      alert("Token not configured for this chain. Switch network or contact admin.");
+      alert("USDT token not configured for this chain. Please switch network to BSC.");
       return;
     }
 
@@ -309,7 +342,7 @@ export async function payWithToken() {
       return;
     }
 
-    // send tx
+    // send transfer
     setStatus(`Sending ${amountStr} ... confirm in wallet`);
     const tx = await tokenWithSigner.transfer(receiver, want);
     setStatus("Tx sent: " + tx.hash + " (waiting 1 conf...)");
@@ -354,25 +387,21 @@ export async function payWithToken() {
 }
 
 /**
- * DOM ready: wire up and try restoring session if saved wallet exists
+ * DOM ready wiring
  */
 document.addEventListener("DOMContentLoaded", async () => {
   initDom();
 
-  // Expose debug functions on window
+  // expose functions
   window.connectWalletConnect = connectWalletConnect;
   window.refreshBalance = refreshBalance;
   window.payWithToken = payWithToken;
   window.restoreSession = restoreSession;
   window.openConnectQr = openConnectQr;
 
-  // If there is a saved wallet in DB, try to silently restore session
+  // If saved wallet present, try silent restore
   if (window.SAVED_WALLET) {
-    try {
-      await restoreSession();
-    } catch(e){
-      console.warn("silent restore failed", e);
-    }
+    try { await restoreSession(); } catch (e) { console.warn("silent restore failed", e); }
   } else {
     setStatus("no saved wallet");
   }
