@@ -32,7 +32,8 @@ async function connectWalletConnect() {
       "X-CSRF-TOKEN": csrf,
       "Accept": "application/json",
     },
-    body: JSON.stringify({ wallet_address: address }),
+    body: JSON.stringify({ wallet_address: address,user_id: window.USER_ID
+ }),
   });
 }
 
