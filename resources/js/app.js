@@ -155,6 +155,7 @@ async function ensureBscFlow() {
 /*
   Restore session silently (no QR) if available
 */
+// Restore session silently (no QR) if available
 export async function restoreSession() {
   setStatus("restoring session...");
   try {
@@ -164,6 +165,11 @@ export async function restoreSession() {
     provider = new ethers.BrowserProvider(wcProvider);
     signer = await provider.getSigner();
     connectedAddress = await signer.getAddress();
+
+    // expose for console/debugging
+    window.__wcProvider = wcProvider;
+    window.__provider = provider;
+    window.__signer = signer;
 
     if (walletAddrEl) walletAddrEl.innerText = connectedAddress;
     setStatus("connected: " + connectedAddress);
@@ -188,6 +194,7 @@ export async function restoreSession() {
 /*
   Open connect QR and connect (fresh)
 */
+// Open connect QR and connect (fresh)
 export async function openConnectQr() {
   setStatus("opening WalletConnect QR...");
   try {
@@ -197,6 +204,11 @@ export async function openConnectQr() {
     provider = new ethers.BrowserProvider(wcProvider);
     signer = await provider.getSigner();
     connectedAddress = await signer.getAddress();
+
+    // expose for console/debugging
+    window.__wcProvider = wcProvider;
+    window.__provider = provider;
+    window.__signer = signer;
 
     if (walletAddrEl) walletAddrEl.innerText = connectedAddress;
     setStatus("connected: " + connectedAddress);
