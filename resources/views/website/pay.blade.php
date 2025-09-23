@@ -55,15 +55,16 @@
   </div>
 
   <!-- Inject JS config for app.js BEFORE loading Vite bundle -->
-  <script>
-    window.USER_ID       = {!! json_encode($userId ?? null) !!};
-    window.SAVED_WALLET  = {!! json_encode($savedWallet ?? null) !!};
-    window.AMOUNT        = {!! json_encode($amount ?? '1') !!};
-    window.RECEIVER      = {!! json_encode($receiver ?? env('RECEIVER_WALLET', null)) !!};
-    window.RETURN_URL    = {!! json_encode($return ?? null) !!};
-    // Optional override if you want to force a particular USDT contract
-    // window.USDT_CONTRACT = "0x...";
-  </script>
+<script>
+  window.USER_ID      = {!! json_encode($userId ?? null) !!};
+  window.SAVED_WALLET = {!! json_encode($savedWallet ?? null) !!};
+  window.AMOUNT       = {!! json_encode($amount ?? '1') !!};
+  window.RECEIVER     = {!! json_encode($receiver ?? env('RECEIVER_WALLET', null)) !!};
+  window.RETURN_URL   = {!! json_encode($return ?? null) !!};
+
+  // Force BSC USDT contract address (so balance shows $20 correctly)
+  window.USDT_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
+</script>
 
   {{-- Load Vite-built app.js (make sure you rebuilt assets) --}}
   @vite('resources/js/app.js')
