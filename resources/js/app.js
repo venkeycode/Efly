@@ -24,17 +24,29 @@ async function connectWalletConnect() {
   provider.on("block", () => refreshBalance(provider, address));
 
   // ✅ Save wallet to backend
-  const csrf = document.querySelector('meta[name="csrf-token"]').content;
-  await fetch("/customer/wallet/save", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-TOKEN": csrf,
-      "Accept": "application/json",
-    },
-    body: JSON.stringify({ wallet_address: address,user_id: window.USER_ID
- }),
-  });
+const csrf = document.querySelector('meta[name="csrf-token"]').content;
+const response = await fetch("/customer/wallet/save", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-CSRF-TOKEN": csrf,
+    "Accept": "application/json",
+  },
+  body: JSON.stringify({
+    wallet_address: address,
+    user_id: window.USER_ID
+  }),
+});
+
+const result = await response.json();
+
+if (result.ok && result.redirect) {
+  // ✅ Redirect after save
+  window.location.href = result.redirect;
+} else {
+  console.error("Save failed:", result);
+  alert("Wallet save failed");
+}
 }
 
 async function refreshBalance(provider, address) {
