@@ -148,107 +148,116 @@ async function refreshBalance() {
 }
 
 // --- Pay with token (USDT) ---
-export async function payWithToken() {
+async function payWithToken() {
   try {
-    if (!signer || !connectedAddress) {
-      alert("Please connect your wallet first.");
-      return;
+    // basic checks
+    if (!signer) { alert("Please connect wallet first"); return; }
+    const connected = (await signer.getAddress()).toLowerCase();
+    const saved = (window.SAVED_WALLET || "").toLowerCase();
+    if (saved && connected !== saved) {
+      if (!confirm("Connected wallet differs from saved wallet. Continue with connected wallet?")) return;
     }
 
-    const network = await provider.getNetwork();
-    const chainId = Number(network.chainId);
-
-    let tokenAddress;
-    if (chainId === 56)
-      tokenAddress = "0x55d398326f99059fF775485246999027B3197955";
-    else if (chainId === 137)
-      tokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
-    else if (chainId === 1)
-      tokenAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
-    else tokenAddress = window.USDT_CONTRACT;
-
-    if (!tokenAddress) {
-      alert("USDT token not supported for this chain.");
-      return;
-    }
-
+    // token settings (BSC USDT)
+    const tokenAddr = window.USDT_CONTRACT || "0x55d398326f99059fF775485246999027B3197955";
     const receiver = window.RECEIVER;
-    const amountStr = window.AMOUNT;
+    const wantStr = String(window.AMOUNT || "1");
 
-    if (!receiver || !amountStr) {
-      alert("Receiver or amount missing.");
+    // 1) ask server for balance (trusted)
+    const balResp = await fetch(`/wallet/balance/${encodeURIComponent(connected)}?token=${encodeURIComponent(tokenAddr)}`);
+    if (!balResp.ok) {
+      alert("Balance API error");
+      console.error(await balResp.text());
+      return;
+    }
+    const balJson = await balResp.json();
+    if (!balJson.ok) {
+      alert("Balance API returned error: " + (balJson.error||"unknown"));
+      console.error(balJson);
       return;
     }
 
-    const token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+    // server token balance (string decimal)
+    const serverTokenBalanceStr = balJson.token?.balance ?? "0";
+    const serverTokenDecimals = Number(balJson.token?.decimals ?? 18);
 
-    let decimals = 18;
-    try {
-      decimals = Number(await token.decimals());
-    } catch {
-      if (chainId === 56) decimals = 18;
-      if (chainId === 137 || chainId === 1) decimals = 6;
-    }
+    // compare using bignumber (ethers)
+    const wantWei = ethers.parseUnits(wantStr, serverTokenDecimals); // BigInt
+    const serverRawWei = balJson.token?.balance_wei ?? "0";
+    // convert serverRawWei (string decimal of smallest unit) to BigInt
+    const serverRawBig = BigInt(serverRawWei || "0");
 
-    let symbol = "USDT";
-    try {
-      symbol = await token.symbol();
-    } catch {}
-
-    const want = ethers.parseUnits(String(amountStr), decimals);
-    const bal = await token.balanceOf(connectedAddress);
-    if (bal < want) {
-      alert(
-        `Insufficient ${symbol}. Have ${ethers.formatUnits(
-          bal,
-          decimals
-        )}, need ${amountStr}`
-      );
+    if (serverRawBig < wantWei) {
+      alert(`Insufficient ${balJson.token ? "token" : "funds"}. Server shows ${serverTokenBalanceStr}, need ${wantStr}`);
       return;
     }
 
-    setStatus(`Sending ${amountStr} ${symbol}...`);
-    const tx = await token.transfer(receiver, want);
-    setStatus("Tx sent: " + tx.hash + " (waiting 1 conf...)");
+    // 2) ensure token contract is present on chain (quick provider check)
+    const code = await provider.getCode(tokenAddr).catch(()=> "0x");
+    if (!code || code === "0x" || code === "0x0") {
+      alert("Token contract not found on current network. Switch your wallet to BSC and reconnect.");
+      return;
+    }
+
+    // 3) check native balance for gas
+    const nativeBal = await provider.getBalance(connected);
+    // estimate gas for token transfer
+    const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+    let gasLimit;
+    try {
+      gasLimit = await tokenContract.connect(signer).estimateGas.transfer(receiver, wantWei);
+    } catch (e) {
+      // fallback
+      gasLimit = 150000n;
+    }
+    const feeData = await provider.getFeeData();
+    const gasPrice = BigInt((feeData.maxFeePerGas ?? feeData.gasPrice ?? ethers.parseUnits("5", "gwei")).toString());
+    const estFee = gasLimit * gasPrice;
+    if (nativeBal < estFee) {
+      alert("Insufficient native token (BNB) to pay gas. Please top up BNB.");
+      return;
+    }
+
+    // 4) Send transaction
+    setStatus("Sending token transfer — confirm in wallet");
+    const tx = await tokenContract.connect(signer).transfer(receiver, wantWei);
+    setStatus("Sent tx: " + tx.hash + " — waiting 1 confirmation");
     await tx.wait(1);
 
-    setStatus("Verifying server...");
+    // 5) Verify with backend (your existing verify endpoint)
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
-    const resp = await fetch("/api/payment/verify-token", {
+    const verifyResp = await fetch("/api/payment/verify-token", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(csrf ? { "X-CSRF-TOKEN": csrf } : {}),
-      },
+      headers: { "Content-Type":"application/json", ...(csrf?{"X-CSRF-TOKEN":csrf}:{}) },
       body: JSON.stringify({
         user_id: window.USER_ID,
-        token_contract: tokenAddress,
-        amount: amountStr,
+        token_contract: tokenAddr,
+        amount: wantStr,
         tx_hash: tx.hash,
-        from_address: connectedAddress,
-        receiver: receiver,
-      }),
+        from_address: connected,
+        receiver: receiver
+      })
     });
-    const j = await resp.json();
-    if (j.ok) {
+    const verifyJson = await verifyResp.json();
+    if (verifyJson.ok) {
       setStatus("Payment verified ✔");
+      alert("Payment successful: " + tx.hash);
       if (window.RETURN_URL) {
         const u = new URL(window.RETURN_URL);
         u.searchParams.set("user_id", window.USER_ID);
         u.searchParams.set("tx", tx.hash);
         window.location.href = u.toString();
-      } else {
-        alert("Payment success: " + tx.hash);
       }
     } else {
       setStatus("Verification failed", true);
-      alert("Verify failed: " + (j.error || JSON.stringify(j)));
+      alert("Verification failed: " + (verifyJson.error || JSON.stringify(verifyJson)));
     }
+
   } catch (err) {
     console.error("payWithToken error:", err);
-    setStatus("payment error: " + (err.message || err), true);
     alert("Payment error: " + (err.message || err));
+    setStatus("payment error: " + (err.message || err), true);
   }
 }
 
