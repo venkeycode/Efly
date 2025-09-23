@@ -7,76 +7,143 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Pay Subscription</title>
 
-  <!-- Optional Bootstrap for nicer look -->
+  <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-
   <style>
-    body { background:#f6f8fa; }
-    .card { max-width:720px; margin:36px auto; }
-    .addr { font-family: monospace; color:#0b74de; word-break: break-all; }
+    body { background: #f6f8fa; }
+    .card-centered { max-width: 900px; margin: 40px auto; padding: 36px; border-radius: 8px; }
+    .addr { font-family: monospace; color: #0b74de; word-break: break-all; font-size: 1.05rem; }
+    .balance { font-size: 1.6rem; font-weight: 600; }
+    .status { color: #666; margin-top: 14px; }
+    .btn-pay { background:#7fb595; border: none; color: #fff; padding: 22px 18px; font-size: 26px; border-radius: 12px; }
+    .small-muted { color:#777; }
   </style>
 </head>
 <body>
-  <div class="card shadow">
-    <div class="card-body p-4 text-center">
-      <h4 class="mb-3">Pay Subscription</h4>
+  <div class="card shadow-sm card-centered bg-white">
+    <div class="text-center">
+      <h2 class="mb-3">Pay Subscription</h2>
 
       @php
-        // fallback server-side values if controller didn't provide
+        // defaults if controller didn't pass
+        $saved = $savedWallet ?? null;
+        $amount = $amount ?? '1';
+        $userId = $userId ?? null;
+        $return = $return ?? null;
         $receiver = $receiver ?? env('RECEIVER_WALLET', null);
+        // Force BSC USDT contract for display (override if different chain)
+        $usdtBsc = '0x55d398326f99059fF775485246999027B3197955';
       @endphp
 
-      @if(empty($savedWallet))
-        <p class="text-danger">No wallet linked to your account.</p>
-        <a href="{{ url('/customer/wallet?user_id=' . ($userId ?? '') ) }}" class="btn btn-primary btn-lg w-75">Connect Wallet</a>
-      @else
-        <div class="mb-3">
-          <div class="small text-muted">Saved wallet</div>
-          <div id="walletAddr" class="addr">{{ $savedWallet }}</div>
-        </div>
+      <div class="mb-2 small-muted">Saved wallet</div>
+      <div id="walletAddr" class="addr mb-3">{{ $saved ?? 'not connected' }}</div>
 
-        <div class="mb-3">
-          <div class="small text-muted">Balance</div>
-          <div id="walletBalance" class="fs-5">Loading...</div>
-        </div>
+      <div class="mb-2 small-muted">Balance</div>
+      <div id="walletBalance" class="balance">Loading...</div>
 
-        <div class="d-grid gap-2 col-8 mx-auto">
-          <button id="payBtn" class="btn btn-success btn-lg" onclick="payWithToken()" disabled>
-            Pay {{ $amount ?? '1' }} USDT
-          </button>
-          <button id="reconnectBtn" class="btn btn-outline-secondary" onclick="openConnectQr()" style="display:none;">
-            Reconnect Wallet (open QR)
-          </button>
-        </div>
+      <div class="mt-4 d-grid gap-2 col-8 mx-auto">
+        <button id="payBtn" class="btn btn-pay" onclick="(window.payWithToken ? window.payWithToken() : alert('Pay function not loaded.'))">
+          Pay {{ $amount }} USDT
+        </button>
 
-        <p id="status" class="mt-3 small text-muted">Status: idle</p>
-      @endif
+        <button id="reconnectBtn" class="btn btn-outline-secondary" onclick="(window.openConnectQr ? window.openConnectQr() : (window.connectWalletConnect ? window.connectWalletConnect() : alert('Connect function not available')))">
+          (Re)Connect Wallet
+        </button>
+      </div>
+
+      <div id="status" class="status">Status: idle</div>
+      <div class="text-center mt-2 small-muted">
+        If balance looks wrong, make sure your wallet network is BSC and the saved wallet matches your connected wallet.
+      </div>
     </div>
   </div>
 
-  <!-- Inject JS config for app.js BEFORE loading Vite bundle -->
-<script>
-  window.USER_ID      = {!! json_encode($userId ?? null) !!};
-  window.SAVED_WALLET = {!! json_encode($savedWallet ?? null) !!};
-  window.AMOUNT       = {!! json_encode($amount ?? '1') !!};
-  window.RECEIVER     = {!! json_encode($receiver ?? env('RECEIVER_WALLET', null)) !!};
-  window.RETURN_URL   = {!! json_encode($return ?? null) !!};
+  <!-- Expose JS config BEFORE loading app.js -->
+  <script>
+    window.USER_ID      = {!! json_encode($userId ?? null) !!};
+    window.SAVED_WALLET = {!! json_encode($saved ?? null) !!};
+    window.AMOUNT       = {!! json_encode($amount ?? '1') !!};
+    window.RECEIVER     = {!! json_encode($receiver ?? env('RECEIVER_WALLET', null)) !!};
+    window.RETURN_URL   = {!! json_encode($return ?? null) !!};
+    // Force BSC USDT contract for server balance fetch
+    window.USDT_CONTRACT = {!! json_encode($usdtBsc) !!};
+  </script>
 
-  // Force BSC USDT contract address (so balance shows $20 correctly)
-  window.USDT_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
-</script>
-
-  {{-- Load Vite-built app.js (make sure you rebuilt assets) --}}
+  {{-- Load your bundled JS which should expose connect/pay functions --}}
   @vite('resources/js/app.js')
 
-  <!-- Optional small script to attempt immediate UI wiring (app.js will handle restore on DOMContentLoaded) -->
   <script>
-    // If you want to trigger a manual silent restore right now (app.js also handles it on load),
-    // uncomment below after app.js has loaded:
-    //
-    // if (window.restoreSession) window.restoreSession();
-    //
-    // You can also call connectWalletConnect() manually from console to open QR.
+    // Local helper: call Laravel API to fetch balance (server-side RPC is reliable)
+    async function fetchBalanceFromServer() {
+      try {
+        const addr = document.getElementById('walletAddr').innerText.trim();
+        if (!addr || addr.toLowerCase().includes('not connected')) {
+          document.getElementById('walletBalance').innerText = 'Not connected';
+          return;
+        }
+
+        // token param: BSC USDT by default (override with window.USDT_CONTRACT)
+        const token = (window.USDT_CONTRACT || '0x55d398326f99059fF775485246999027B3197955');
+        const url = `/wallet/balance/${encodeURIComponent(addr)}?token=${encodeURIComponent(token)}`;
+
+        document.getElementById('status').innerText = 'Status: fetching balance...';
+
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) {
+          console.error('Balance API returned', res.status, await res.text());
+          document.getElementById('walletBalance').innerText = 'Error';
+          document.getElementById('status').innerText = 'Status: balance fetch failed';
+          return;
+        }
+
+        const body = await res.json();
+        if (!body.ok) {
+          console.error('Balance API body', body);
+          document.getElementById('walletBalance').innerText = 'Error';
+          document.getElementById('status').innerText = 'Status: API error';
+          return;
+        }
+
+        // Build display: native + token (if present)
+        let nativeText = '0 ' + (body.native?.symbol ?? 'NATIVE');
+        if (body.native && body.native.balance !== undefined) nativeText = body.native.balance + ' ' + (body.native.symbol ?? 'NATIVE');
+
+        let tokenText = '0.00 USDT';
+        if (body.token && body.token.balance !== undefined) {
+          // format token decimals: body.token.balance is a string decimal
+          tokenText = parseFloat(body.token.balance).toFixed(2) + ' USDT';
+        }
+
+        document.getElementById('walletBalance').innerText = `${nativeText} | ${tokenText}`;
+        document.getElementById('status').innerText = 'Status: balance updated';
+
+      } catch (e) {
+        console.error('fetchBalance error', e);
+        document.getElementById('walletBalance').innerText = 'Error';
+        document.getElementById('status').innerText = 'Status: fetch error';
+      }
+    }
+
+    // Auto-refresh every 15s
+    let balanceInterval = null;
+    document.addEventListener('DOMContentLoaded', function() {
+      // immediate fetch
+      fetchBalanceFromServer();
+      // poll
+      if (!balanceInterval) balanceInterval = setInterval(fetchBalanceFromServer, 15000);
+
+      // If the frontend wallet script signals a connect event, refresh balance then
+      // (app.js should call window.refreshBalance() or expose events — we also wire a fallback)
+      if (window.refreshBalance) {
+        // keep existing: if app.js has a refreshBalance that fetches via server, it will run
+      }
+
+      // Optional: when the user connects with wallet in app.js, it can call fetchBalanceFromServer()
+      window.__refreshFreshBalance = fetchBalanceFromServer;
+    });
+
+    // Provide a global function that app.js can call after saving/connecting wallet
+    window.fetchBalanceFromServer = fetchBalanceFromServer;
   </script>
 </body>
 </html>
