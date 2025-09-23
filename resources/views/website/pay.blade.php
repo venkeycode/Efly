@@ -13,14 +13,12 @@
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <script>
   window.USER_ID = "{{ $userId }}";
-  window.AMOUNT = "1.0"; // USDT amount
+  window.AMOUNT = "1.0"; // Example: 1 USDT
   window.RECEIVER = "0xYourReceiverWalletHere";
-  // BSC USDT (wrapped Tether on BSC)
+  // ✅ BSC USDT contract
   window.USDT_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
-  // optional: RETURN_URL back to CI
-  window.RETURN_URL = "{{ $returnUrl ?? '' }}";
+  window.RETURN_URL = "{{ $return ?? '' }}";
 </script>
-
 <button onclick="connectWalletConnect()">Connect Wallet</button>
 <div>Address: <span id="walletAddr">-</span></div>
 <div>Balance: <span id="walletBalance">-</span></div>
