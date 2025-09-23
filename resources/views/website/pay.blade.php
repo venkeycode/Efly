@@ -12,8 +12,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
 <script src="https://unpkg.com/@walletconnect/ethereum-provider/dist/umd/index.min.js"></script>
 <script>
-const PROJECT_ID = "611536788e4297012ef34993004d5565";
-const CHAIN_IDS = [137]; // Polygon
+const PROJECT_ID = "611536788e4297012ef34993004d5565"; // your WalletConnect Project ID
+const CHAIN_IDS = [56]; // ✅ BSC mainnet
+const USDT_CONTRACT = "0x55d398326f99059fF775485246999027B3197955"; // ✅ BSC USDT
+const RECEIVER = "{{ $receiver }}"; // put your receiver wallet
+const AMOUNT = "{{ $amount }}"; // e.g. "1.0"
+
 let provider, signer;
 
 async function restoreSession() {
@@ -21,16 +25,17 @@ async function restoreSession() {
     provider = await window.WalletConnectProvider.EthereumProvider.init({
       projectId: PROJECT_ID,
       chains: CHAIN_IDS,
-      showQrModal: false, // don't show QR unless needed
+      showQrModal: false,
     });
     await provider.enable();
+
     const ethersProvider = new ethers.BrowserProvider(provider);
     signer = await ethersProvider.getSigner();
 
     document.getElementById("payBtn").disabled = false;
-    console.log("Restored session, wallet ready:", await signer.getAddress());
+    console.log("Wallet restored:", await signer.getAddress());
   } catch (e) {
-    console.warn("No active session, require reconnect:", e);
+    console.warn("No active session. User must reconnect:", e);
   }
 }
 
@@ -40,22 +45,43 @@ async function payWithToken() {
     return;
   }
 
-  const token = "{{ $token }}";
-  const receiver = "{{ $receiver }}";
-  const amount = "{{ $amount }}";
+  try {
+    const abi = [
+      "function transfer(address to, uint256 value) returns (bool)",
+      "function decimals() view returns (uint8)"
+    ];
 
-  const abi = [
-    "function transfer(address to, uint256 value) returns (bool)",
-    "function decimals() view returns (uint8)"
-  ];
-  const contract = new ethers.Contract(token, abi, signer);
-  const decimals = await contract.decimals().catch(()=>6);
-  const value = ethers.parseUnits(amount, decimals);
+    const contract = new ethers.Contract(USDT_CONTRACT, abi, signer);
+    const decimals = await contract.decimals().catch(()=>18);
 
-  const tx = await contract.transfer(receiver, value);
-  await tx.wait(1);
+    const value = ethers.parseUnits(AMOUNT, decimals);
 
-  alert("Payment done! Tx: " + tx.hash);
+    console.log(`Sending ${AMOUNT} USDT to ${RECEIVER}...`);
+
+    const tx = await contract.transfer(RECEIVER, value);
+    setStatus("Tx sent: " + tx.hash);
+
+    await tx.wait(1);
+    alert("✅ Payment success. Tx: " + tx.hash);
+
+    // Optionally verify with Laravel
+    await fetch("/api/payment/verify-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: "{{ $userId }}",
+        token_contract: USDT_CONTRACT,
+        amount: AMOUNT,
+        tx_hash: tx.hash,
+        from_address: await signer.getAddress(),
+        receiver: RECEIVER
+      })
+    });
+
+  } catch (err) {
+    console.error("Payment failed:", err);
+    alert("❌ Payment error: " + (err.message || err));
+  }
 }
 
 @if(!empty($savedWallet))
