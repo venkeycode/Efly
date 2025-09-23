@@ -103,6 +103,7 @@ Route::group(['middleware' => 'cors'], function () {
     Route::post('/customer/wallet/save', 'WalletController@save')->name('customer.wallet.save');
     Route::get('/wallet/pay', 'WalletController@showPayPage');
     Route::get('/wallet/balance/{address}', 'WalletController@getBalance');
+    Route::post('/payment/verify', 'WalletController@verifyPayment');
 
  });
 
