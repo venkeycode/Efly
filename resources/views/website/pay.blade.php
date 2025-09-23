@@ -135,5 +135,43 @@
     }
   }
 </script>
+<!-- ethers.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+
+<!-- WalletConnect Ethereum Provider -->
+<script src="https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.9.0/dist/umd/index.min.js"></script>
+
+<script>
+  // normalize WalletConnect provider export
+  const WCEthProvider = window.EthereumProvider
+    || window.WalletConnectEthereumProvider
+    || (window.WalletConnectProvider ? window.WalletConnectProvider.default : null);
+
+  if (!WCEthProvider) {
+    console.error("WalletConnect provider not found in globals.");
+  }
+
+  async function connectWalletConnect() {
+    try {
+      const ethProvider = await WCEthProvider.init({
+        projectId: "611536788e4297012ef34993004d5565", // your WalletConnect Cloud ID
+        chains: [137], // Polygon
+        showQrModal: true,
+      });
+
+      await ethProvider.enable();
+
+      const provider = new ethers.BrowserProvider(ethProvider);
+      const signer = await provider.getSigner();
+      const address = await signer.getAddress();
+
+      document.getElementById("walletAddr").innerText = address;
+      document.getElementById("status").innerText = "Connected ✔ " + address;
+    } catch (err) {
+      console.error("Connect failed:", err);
+      document.getElementById("status").innerText = "Error: " + err.message;
+    }
+  }
+</script>
 </body>
 </html>
