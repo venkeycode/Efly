@@ -71,17 +71,78 @@ async function initWcProvider({ showQrModal=false } = {}) {
   try to switch chain via wallet_switchEthereumChain (no wallet_addEthereumChain)
   returns true if on target chain at end, false otherwise
 */
-async function trySwitchToChain(ethProvider, targetChainId=56) {
-  try {
-    const hex = "0x" + Number(targetChainId).toString(16);
-    await ethProvider.send("wallet_switchEthereumChain", [{ chainId: hex }]);
-    return true;
-  } catch (err) {
-    console.warn("wallet_switchEthereumChain failed:", err);
+// robustly ask the provider to switch chain
+async function trySwitchToChain(ethProvider, targetChainId = 56) {
+  const hex = "0x" + Number(targetChainId).toString(16);
+
+  // helper to call EIP-1193 style `.request`
+  async function tryRequest(obj) {
+    if (!obj) return false;
+    try {
+      if (typeof obj.request === "function") {
+        await obj.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
+        return true;
+      }
+      // some older providers use send(method, params)
+      if (typeof obj.send === "function") {
+        // some .send(...) implementations take (method, params)
+        // others take (payload, callback) - we try the simple form first
+        try {
+          await obj.send("wallet_switchEthereumChain", [{ chainId: hex }]);
+          return true;
+        } catch (e) {
+          // try send with payload + callback
+          try {
+            await new Promise((resolve, reject) => {
+              obj.send(
+                { jsonrpc: "2.0", id: Date.now(), method: "wallet_switchEthereumChain", params: [{ chainId: hex }] },
+                (err, result) => (err ? reject(err) : resolve(result))
+              );
+            });
+            return true;
+          } catch (e2) {
+            // fall through
+          }
+        }
+      }
+      // some providers expose sendAsync
+      if (typeof obj.sendAsync === "function") {
+        await new Promise((resolve, reject) => {
+          obj.sendAsync(
+            { jsonrpc: "2.0", id: Date.now(), method: "wallet_switchEthereumChain", params: [{ chainId: hex }] },
+            (err, result) => (err ? reject(err) : resolve(result))
+          );
+        });
+        return true;
+      }
+    } catch (err) {
+      // request failed for this object
+      // console.warn("tryRequest failed on object", err);
+      return false;
+    }
     return false;
   }
-}
 
+  // Try multiple likely objects in order:
+  // 1) the raw walletConnect provider object (wcProvider)
+  // 2) provider.provider (ethers BrowserProvider wraps underlying)
+  // 3) the provider itself (sometimes BrowserProvider has request, sometimes not)
+  const candidates = [ethProvider, wcProvider, (provider && provider.provider), provider];
+
+  for (const cand of candidates) {
+    if (!cand) continue;
+    try {
+      const ok = await tryRequest(cand);
+      if (ok) return true;
+    } catch (e) {
+      // ignore and try next candidate
+      console.warn("chain switch attempt failed for candidate:", e);
+    }
+  }
+
+  // nothing worked
+  return false;
+}
 /*
   Ensure BSC flow: returns true if on BSC at end
   - tries wallet_switchEthereumChain
