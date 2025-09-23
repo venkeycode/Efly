@@ -287,74 +287,101 @@ async function ensureNativeForGas(tokenContractAddress, receiver, amountUnits /*
 }
 
 /* Pay with token (USDT) flow */
+/*
+  Payment flow: uses server balance as gate, then uses signer to send token.transfer()
+*/
 export async function payWithToken() {
   try {
-    if (!signer) { alert("Please connect your wallet first."); return; }
+    if (!signer) {
+      alert("Please connect your wallet first.");
+      return;
+    }
+
     const connected = (await signer.getAddress()).toLowerCase();
     const saved = (window.SAVED_WALLET || "").toLowerCase();
     if (saved && connected !== saved) {
-      if (!confirm("Connected wallet differs from saved wallet. Continue?")) return;
+      if (!confirm("Connected wallet differs from saved wallet. Continue with connected wallet?")) return;
     }
 
-    // Determine token & receiver & amount
     const tokenAddr = window.USDT_CONTRACT || BSC_USDT;
     const receiver = window.RECEIVER;
     const amountStr = String(window.AMOUNT || "1");
-    if (!tokenAddr || !receiver || !amountStr) { alert("Missing token/receiver/amount"); return; }
 
-    setStatus("Checking server balance...");
+    if (!receiver || !amountStr) {
+      alert("Receiver or amount missing.");
+      return;
+    }
+
+    // 1) server balance check for trusted info
+    setStatus("checking server balance...");
     const server = await fetchBalanceFromServer(connected);
-    if (!server) { alert("Could not get server balance."); return; }
+    if (!server) {
+      alert("Could not get server balance.");
+      return;
+    }
 
-    const serverTokenRaw = server.token?.balance_wei ?? "0"; // decimal string
+    const serverTokenRaw = server.token?.balance_wei ?? "0"; // string decimal
     const serverTokenDecimals = Number(server.token?.decimals ?? 18);
     const requiredWei = ethers.parseUnits(amountStr, serverTokenDecimals);
     const serverBig = BigInt(serverTokenRaw || "0");
 
     if (serverBig < requiredWei) {
-      alert(`Insufficient ${ (server.token?.symbol ?? 'USDT') }. Server shows ${server.token?.balance ?? '0'}. Need ${amountStr}`);
+      alert(`Insufficient USDT. Server shows ${server.token?.balance ?? "0"}. Need ${amountStr}`);
       setStatus("insufficient token", true);
       return;
     }
 
-    // ensure token contract exists on current chain
+    // 2) ensure token contract exists on current chain
     const code = await provider.getCode(tokenAddr).catch(()=> "0x");
     if (!code || code === "0x" || code === "0x0") {
-      alert("Token contract not found on current network. Switch wallet to BSC and reconnect.");
+      alert("Token contract not found on current network. Switch your wallet to BSC and reconnect.");
       setStatus("token not on chain", true);
       return;
     }
 
-    // check native (BNB) for gas
-    setStatus("Checking gas requirement...");
-    const gasCheck = await ensureNativeForGas(tokenAddr, receiver, requiredWei);
-    if (!gasCheck.ok) {
-      alert(
-        `Insufficient native token (BNB) for gas.\nYou have: ${gasCheck.balanceBNB} BNB\nRequired (approx): ${gasCheck.requiredBNB} BNB\nShort by: ${gasCheck.shortBNB} BNB\nPlease top up and try again.`
-      );
+    // 3) prepare contract
+    const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+    const tokenWithSigner = tokenContract.connect(signer);
+
+    // 4) estimate gas
+    let gasLimit;
+    try {
+      gasLimit = await tokenWithSigner.estimateGas.transfer(receiver, requiredWei);
+      console.log("DEBUG: estimated gasLimit", gasLimit.toString());
+    } catch (e) {
+      console.warn("estimateGas failed, fallback to 150000", e);
+      gasLimit = 150000n;
+    }
+
+    // 5) ensure native balance for gas
+    const nativeBal = await provider.getBalance(connected);
+    const feeData = await provider.getFeeData();
+    const gasPriceRaw = feeData.maxFeePerGas ?? feeData.gasPrice ?? ethers.parseUnits("5", "gwei");
+    const gasPrice = BigInt(gasPriceRaw.toString());
+    const estimatedFee = gasPrice * BigInt(gasLimit);
+
+    if (nativeBal < estimatedFee) {
+      const haveBNB = parseFloat(ethers.formatEther(nativeBal));
+      const needBNB = parseFloat(ethers.formatEther(estimatedFee));
+      alert(`Insufficient BNB for gas.\nYou have: ${haveBNB}\nNeed ~${needBNB}\nPlease top up.`);
       setStatus("insufficient gas", true);
       return;
     }
 
-    // Confirm and send
-    if (!confirm(`Send ${amountStr} USDT? Estimated gas ≈ ${ethers.formatEther(gasCheck.estimatedFeeWei)} BNB (with buffer).`)) {
-      setStatus("payment cancelled");
-      return;
-    }
-
-    setStatus("Sending token transfer — confirm in wallet...");
-    const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, signer);
-    const tx = await tokenContract.transfer(receiver, requiredWei);
+    // 6) send transfer
+    setStatus("Sending transfer — confirm in wallet...");
+    const tx = await tokenWithSigner.transfer(receiver, requiredWei);
     setStatus("Tx sent: " + tx.hash + " — waiting 1 confirmation...");
     await tx.wait(1);
+    setStatus("Transaction mined: " + tx.hash);
 
-    // verify with server
-    setStatus("Verifying server...");
+    // 7) server verify
+    setStatus("Verifying with server...");
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute('content') : null;
     const resp = await fetch("/api/payment/verify-token", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(csrf?{"X-CSRF-TOKEN":csrf}:{}) },
+      headers: { "Content-Type":"application/json", ...(csrf?{"X-CSRF-TOKEN":csrf}:{}) },
       body: JSON.stringify({
         user_id: window.USER_ID,
         token_contract: tokenAddr,
@@ -378,13 +405,13 @@ export async function payWithToken() {
       setStatus("Verification failed", true);
       alert("Verification failed: " + (j.error || JSON.stringify(j)));
     }
+
   } catch (err) {
     console.error("payWithToken error:", err);
     setStatus("payment error: " + (err.message || err), true);
     alert("Payment error: " + (err.message || err));
   }
 }
-
 /* Wire up on DOM ready */
 document.addEventListener("DOMContentLoaded", async () => {
   initDom();
