@@ -12,7 +12,7 @@ class WalletController extends Controller
 {
     public function show(Request $request)
     {
-        $userId = $request->get('user_id'); // passed from CodeIgniter
+        $userId = $request->get('user_id');
         return view('website.connect', compact('userId'));
     }
 
@@ -23,15 +23,10 @@ class WalletController extends Controller
             'user_id' => 'required|integer'
         ]);
 
-        // since both apps share DB, just update user row
         $customer = Customer::find($request->user_id);
         $customer->wallet_address = $request->wallet_address;
         $customer->save();
-        // DB::table('users')
-        //     ->where('id', $request->user_id)
-        //     ->update(['wallet_address' => $request->wallet_address]);
 
-        // after saving, redirect back to CI app
         return response()->json([
             'ok' => true,
             'wallet_address' => $request->wallet_address,
@@ -40,272 +35,201 @@ class WalletController extends Controller
     }
 
     public function getBalance(Request $request, $address)
-{
-    $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com'); // set in .env
-    $chainDecimals = 18;
+    {
+        $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com');
+        $chainDecimals = 18;
 
-    $token = $request->query('token');       // optional ERC20 contract address
-    $decimalsQuery = $request->query('decimals'); // optional token decimals override
+        $token = $request->query('token');
+        $decimalsQuery = $request->query('decimals');
 
-    // 1) Native balance (always return)
-    $response = Http::post($rpcUrl, [
-        'jsonrpc' => '2.0',
-        'id' => 1,
-        'method' => 'eth_getBalance',
-        'params' => [$address, 'latest'],
-    ]);
+        // Native balance
+        $response = Http::post($rpcUrl, [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'eth_getBalance',
+            'params' => [$address, 'latest'],
+        ]);
+        $nativeHex = $response->json('result') ?? '0x0';
 
-    if ($response->failed()) {
-        return response()->json(['ok' => false, 'error' => 'RPC call failed', 'details' => $response->body()], 500);
-    }
+        $nativeWeiStr = $this->hexToDecString($nativeHex);
+        $nativeBalance = $this->formatUnits($nativeWeiStr, $chainDecimals);
 
-    $nativeHex = $response->json('result') ?? null;
-    if (!$nativeHex) {
-        return response()->json(['ok' => false, 'error' => 'No native balance returned'], 404);
-    }
+        $out = [
+            'ok' => true,
+            'address' => $address,
+            'native' => [
+                'balance_wei' => $nativeWeiStr,
+                'balance' => $nativeBalance,
+                'symbol' => 'NATIVE',
+            ],
+        ];
 
-    $nativeWeiStr = $this->hexToDecString($nativeHex); // string decimal of wei
-    $nativeBalance = $this->formatUnits($nativeWeiStr, $chainDecimals); // decimal string
+        // ERC20 token balance
+        if ($token) {
+            $token = strtolower($token);
+            if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
+                $decimals = intval($decimalsQuery);
+            } else {
+                $data = '0x313ce567'; // decimals()
+                $decResp = Http::post($rpcUrl, [
+                    'jsonrpc' => '2.0',
+                    'id' => 1,
+                    'method' => 'eth_call',
+                    'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
+                ]);
+                $decimals = $decResp->json('result') ? hexdec($decResp->json('result')) : 18;
+            }
 
-    $out = [
-        'ok' => true,
-        'address' => $address,
-        'native' => [
-            'balance_wei' => $nativeWeiStr,    // string (wei)
-            'balance' => $nativeBalance,       // human string (18 decimals)
-            'symbol' => 'NATIVE',
-        ],
-    ];
+            $method = '70a08231'; // balanceOf(address)
+            $addr = ltrim(strtolower($address), '0x');
+            $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
+            $data = '0x' . $method . $addr;
 
-    // 2) If token passed, get token balance and decimals
-    if ($token) {
-        $token = strtolower($token);
-        // get decimals (if provided by query use it, otherwise call contract)
-        if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
-            $decimals = intval($decimalsQuery);
-        } else {
-            // call decimals() -> method id = 0x313ce567
-            $data = '0x313ce567';
-            $decResp = Http::post($rpcUrl, [
+            $balResp = Http::post($rpcUrl, [
                 'jsonrpc' => '2.0',
                 'id' => 1,
                 'method' => 'eth_call',
-                'params' => [
-                    [
-                        'to' => $token,
-                        'data' => $data
-                    ],
-                    'latest'
-                ],
+                'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
             ]);
+            $balResult = $balResp->json('result') ?? '0x0';
 
-            $decResult = $decResp->json('result');
-            if ($decResult && $decResult !== '0x') {
-                // parse small hex to int
-                $decimals = hexdec($decResult);
-            } else {
-                // fallback to 18 if token doesn't implement decimals properly
-                $decimals = 18;
-            }
-        }
-
-        // balanceOf(address) -> method id 0x70a08231 + padded address
-        $method = '70a08231';
-        $addr = strtolower($address);
-        if (substr($addr, 0, 2) === '0x') $addr = substr($addr, 2);
-        $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
-        $data = '0x' . $method . $addr;
-
-        $balResp = Http::post($rpcUrl, [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'eth_call',
-            'params' => [
-                [
-                    'to' => $token,
-                    'data' => $data
-                ],
-                'latest'
-            ],
-        ]);
-
-        $balResult = $balResp->json('result') ?? null;
-        if (!$balResult) {
-            $tokenBalanceWeiStr = "0";
-            $tokenBalanceFormatted = "0";
-        } else {
             $tokenBalanceWeiStr = $this->hexToDecString($balResult);
             $tokenBalanceFormatted = $this->formatUnits($tokenBalanceWeiStr, $decimals);
+
+            $out['token'] = [
+                'contract' => $token,
+                'decimals' => $decimals,
+                'balance_wei' => $tokenBalanceWeiStr,
+                'balance' => $tokenBalanceFormatted,
+            ];
         }
 
-        $out['token'] = [
-            'contract' => $token,
-            'decimals' => $decimals,
-            'balance_wei' => $tokenBalanceWeiStr,
-            'balance' => $tokenBalanceFormatted
-        ];
+        return response()->json($out);
     }
 
-    return response()->json($out);
-}
-
-/**
- * Convert hex string like 0x<...> to decimal string using BCMath to avoid overflow.
- * Returns a string representation of the decimal number.
- */
-private function hexToDecString($hex)
-{
-    if (!$hex) return '0';
-    if (substr($hex, 0, 2) === '0x') $hex = substr($hex, 2);
-    $dec = '0';
-    $len = strlen($hex);
-    for ($i = 0; $i < $len; $i++) {
-        $dec = bcmul($dec, '16', 0);
-        $dec = bcadd($dec, hexdec($hex[$i]), 0);
-    }
-    return $dec; // decimal string
-}
-
-/**
- * Convert a decimal string (wei or token smallest unit) to human readable with decimals places.
- * Returns string (not float) to preserve precision.
- */
-private function formatUnits(string $weiDecString, int $decimals = 18): string
-{
-    if ($decimals <= 0) return $weiDecString;
-    // If weiDecString shorter than decimals, left-pad with zeros
-    $negative = false;
-    if (strpos($weiDecString, '-') === 0) {
-        $negative = true;
-        $weiDecString = substr($weiDecString, 1);
-    }
-    $len = strlen($weiDecString);
-    if ($len <= $decimals) {
-        $intPart = '0';
-        $fracPart = str_pad($weiDecString, $decimals, '0', STR_PAD_LEFT);
-    } else {
-        $intPart = substr($weiDecString, 0, $len - $decimals);
-        $fracPart = substr($weiDecString, $len - $decimals);
-    }
-    // trim trailing zeros on fractional part
-    $fracPart = rtrim($fracPart, '0');
-    $result = $intPart . ($fracPart !== '' ? '.' . $fracPart : '');
-    if ($negative) $result = '-' . $result;
-    return $result;
-}
-    // public function getBalance($address)
-    // {
-    //     $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com'); // fallback if not in .env
-    //     $chainDecimals = 18; // ETH, MATIC, BNB all use 18 decimals
-
-    //     // Call JSON-RPC: eth_getBalance
-    //     $response = Http::post($rpcUrl, [
-    //         'jsonrpc' => '2.0',
-    //         'id' => 1,
-    //         'method' => 'eth_getBalance',
-    //         'params' => [$address, 'latest'],
-    //     ]);
-
-    //     if ($response->failed()) {
-    //         return response()->json([
-    //             'ok' => false,
-    //             'error' => 'RPC call failed',
-    //             'details' => $response->body(),
-    //         ], 500);
-    //     }
-
-    //     $result = $response->json('result');
-    //     if (!$result) {
-    //         return response()->json([
-    //             'ok' => false,
-    //             'error' => 'No balance returned',
-    //         ], 404);
-    //     }
-
-    //     // Convert hex balance (wei) to decimal
-    //     $balanceWei = hexdec(substr($result, 2)); // hex string to int
-    //     $balance = $balanceWei / pow(10, $chainDecimals);
-
-    //     return response()->json([
-    //         'ok' => true,
-    //         'address' => $address,
-    //         'balance_wei' => $balanceWei,
-    //         'balance' => $balance, // in ETH/MATIC/BNB
-    //     ]);
-    // }
-
-     public function showPayPage(Request $r)
+    public function showPayPage(Request $r)
     {
         $userId = $r->query('user_id');
         $amount = $r->query('amount');
-        $return = $r->query('return'); // CI return URL
+        $return = $r->query('return');
         $savedWallet = DB::table('customdetails')->where('uid', $userId)->value('wallet_address');
         return view('website.pay', compact('userId','amount','return','savedWallet'));
     }
 
-    // Verify payment (API)
-    public function verifyPayment(Request $r)
+    /**
+     * ✅ Verify ERC20 (USDT) payment
+     */
+    public function verifyTokenPayment(Request $r)
     {
         $r->validate([
             'user_id' => 'required|integer',
+            'token_contract' => 'required|string',
             'amount' => 'required|string',
             'tx_hash' => 'required|string',
             'from_address' => 'required|string',
+            'receiver' => 'required|string'
         ]);
 
-        $userId = $r->user_id;
-        $txHash = $r->tx_hash;
-        $amount = $r->amount;
-        $fromAddress = strtolower($r->from_address);
-
-        $savedWallet = DB::table('customdetails')->where('userid', $userId)->value('wallet_address');
-        if (!$savedWallet) return response()->json(['ok'=>false,'error'=>'No saved wallet for user'], 400);
-
-        if (strtolower($savedWallet) !== $fromAddress) {
-            return response()->json(['ok'=>false,'error'=>'Sender does not match saved wallet'], 400);
-        }
-
-        $receiver = strtolower(env('RECEIVER_WALLET'));
         $rpc = env('RPC_URL');
-        if (!$rpc) return response()->json(['ok'=>false,'error'=>'RPC not configured'], 500);
+        $token = strtolower($r->token_contract);
+        $from = strtolower($r->from_address);
+        $receiver = strtolower($r->receiver);
+        $amountDecimal = $r->amount;
 
-        // get tx
-        $txResp = Http::post($rpc, [
-            'jsonrpc'=>'2.0','id'=>1,'method'=>'eth_getTransactionByHash','params'=>[$txHash]
-        ]);
-        $tx = $txResp->json('result');
-        if (!$tx) return response()->json(['ok'=>false,'error'=>'Transaction not found'], 404);
-
-        $to = strtolower($tx['to'] ?? '');
-        $from = strtolower($tx['from'] ?? '');
-        $valueWei = $this->hexToDecString($tx['value'] ?? '0x0');
-        $requiredWei = $this->toWeiString($amount);
-
-        if ($to !== $receiver) return response()->json(['ok'=>false,'error'=>'Receiver mismatch'], 400);
-        if ($from !== $fromAddress) return response()->json(['ok'=>false,'error'=>'Sender mismatch'], 400);
-        if (bccomp($valueWei, $requiredWei) < 0) return response()->json(['ok'=>false,'error'=>'Insufficient amount'], 400);
-
-        // receipt
-        $receiptResp = Http::post($rpc, ['jsonrpc'=>'2.0','id'=>2,'method'=>'eth_getTransactionReceipt','params'=>[$txHash]]);
-        $receipt = $receiptResp->json('result');
-        if (!$receipt || hexdec($receipt['status'] ?? '0x0') !== 1) {
-            return response()->json(['ok'=>false,'error'=>'Transaction not successful or receipt missing'], 400);
+        // Ensure wallet matches saved one
+        $savedWallet = DB::table('customdetails')->where('userid', $r->user_id)->value('wallet_address');
+        if (!$savedWallet || strtolower($savedWallet) !== $from) {
+            return response()->json(['ok'=>false,'error'=>'Saved wallet mismatch'], 400);
         }
 
-        // success
-        return response()->json(['ok'=>true,'tx_hash'=>$txHash]);
+        // Fetch tx receipt
+        $receiptResp = Http::post($rpc, [
+            'jsonrpc'=>'2.0','id'=>1,'method'=>'eth_getTransactionReceipt','params'=>[$r->tx_hash]
+        ]);
+        $receipt = $receiptResp->json('result');
+        if (!$receipt) return response()->json(['ok'=>false,'error'=>'Receipt not found'], 404);
+        if (hexdec($receipt['status'] ?? '0x0') !== 1) {
+            return response()->json(['ok'=>false,'error'=>'Transaction failed'], 400);
+        }
+
+        // ERC20 Transfer event topic
+        $transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+        $found = false;
+        foreach ($receipt['logs'] as $log) {
+            if (strtolower($log['address']) !== $token) continue;
+            if ($log['topics'][0] !== $transferTopic) continue;
+
+            $topicFrom = '0x' . substr($log['topics'][1], 26);
+            $topicTo   = '0x' . substr($log['topics'][2], 26);
+
+            if (strtolower($topicFrom) !== $from) continue;
+            if (strtolower($topicTo) !== $receiver) continue;
+
+            $valueWeiStr = $this->hexToDecString($log['data']);
+            $decimals = $this->getTokenDecimals($token, $rpc);
+            $requiredWeiStr = $this->decimalToWeiString($amountDecimal, $decimals);
+
+            if (bccomp($valueWeiStr, $requiredWeiStr) >= 0) {
+                $found = true;
+                break;
+            }
+        }
+
+        if (!$found) return response()->json(['ok'=>false,'error'=>'No matching Transfer found'], 400);
+
+        return response()->json(['ok'=>true,'tx_hash'=>$r->tx_hash]);
     }
 
-    // private function hexToDecString($hex) {
-    //     if (substr($hex,0,2)==='0x') $hex=substr($hex,2);
-    //     $dec='0';
-    //     for ($i=0;$i<strlen($hex);$i++){
-    //         $dec = bcmul($dec,'16',0);
-    //         $dec = bcadd($dec, hexdec($hex[$i]), 0);
-    //     }
-    //     return $dec;
-    // }
-    private function toWeiString($amount) {
-        return bcmul($amount, bcpow('10','18',0), 0);
+    // ---- Helpers ----
+
+    private function hexToDecString($hex)
+    {
+        if (!$hex) return '0';
+        if (substr($hex, 0, 2) === '0x') $hex = substr($hex, 2);
+        $dec = '0';
+        for ($i = 0; $i < strlen($hex); $i++) {
+            $dec = bcmul($dec, '16', 0);
+            $dec = bcadd($dec, hexdec($hex[$i]), 0);
+        }
+        return $dec;
+    }
+
+    private function formatUnits(string $weiDecString, int $decimals = 18): string
+    {
+        if ($decimals <= 0) return $weiDecString;
+        $len = strlen($weiDecString);
+        if ($len <= $decimals) {
+            $intPart = '0';
+            $fracPart = str_pad($weiDecString, $decimals, '0', STR_PAD_LEFT);
+        } else {
+            $intPart = substr($weiDecString, 0, $len - $decimals);
+            $fracPart = substr($weiDecString, $len - $decimals);
+        }
+        $fracPart = rtrim($fracPart, '0');
+        return $intPart . ($fracPart !== '' ? '.' . $fracPart : '');
+    }
+
+    private function decimalToWeiString($decimalStr, $decimals)
+    {
+        if (strpos($decimalStr, '.') !== false) {
+            [$intPart, $fracPart] = explode('.', $decimalStr);
+        } else {
+            $intPart = $decimalStr;
+            $fracPart = '';
+        }
+        $fracPart = str_pad(substr($fracPart, 0, $decimals), $decimals, '0');
+        $combined = $intPart . $fracPart;
+        return ltrim($combined, '0') ?: '0';
+    }
+
+    private function getTokenDecimals($token, $rpc)
+    {
+        $resp = Http::post($rpc, [
+            'jsonrpc'=>'2.0','id'=>1,'method'=>'eth_call',
+            'params'=>[[ 'to'=>$token, 'data'=>'0x313ce567' ], 'latest']
+        ]);
+        $res = $resp->json('result');
+        return $res ? hexdec($res) : 18;
     }
 }
