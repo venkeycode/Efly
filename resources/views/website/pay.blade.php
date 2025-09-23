@@ -26,7 +26,7 @@
 
       @php
         // defaults if controller didn't pass
-        $receiver = '0xE77209d4f81121615953b6292DD0974f9883A1d9';
+        $receiver = '0x8Ab8a499Ca0Ae83A62Aa93397CA9fbDC7Cec9e5A';
         $saved = $savedWallet ?? null;
         $amount = $amount ?? '1';
         $userId = $userId ?? null;
