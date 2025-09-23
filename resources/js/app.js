@@ -124,83 +124,26 @@ export async function connectWalletConnect() {
 }
 
 // --- Refresh balances (native + token) ---
-export async function refreshBalance() {
+async function refreshBalance() {
   try {
-    if (!provider || !connectedAddress) {
-      if (walletBalanceEl) walletBalanceEl.innerText = "—";
-      return;
+    const address = connectedAddress; // already connected via wallet
+    if (!address) return;
+
+    // Call Laravel API instead of ethers.js
+    const res = await fetch(`/wallet/balance/${address}?token=0x55d398326f99059fF775485246999027B3197955`);
+    const data = await res.json();
+
+    if (data.ok) {
+      const native = data.native.balance + " " + data.native.symbol;
+      const token = data.token ? (data.token.balance + " USDT") : "—";
+      document.getElementById("walletBalance").innerText = `${native} | ${token}`;
+    } else {
+      document.getElementById("walletBalance").innerText = "Error";
+      console.error("API error:", data);
     }
-
-    let nativeText = "—";
-    try {
-      const balWei = await provider.getBalance(connectedAddress);
-      nativeText = parseFloat(ethers.formatEther(balWei)).toFixed(6);
-    } catch (err) {
-      console.error("Native balance error:", err);
-      nativeText = "Error";
-    }
-
-    let network = { chainId: null, name: "unknown" };
-    try {
-      network = await provider.getNetwork();
-    } catch (err) {
-      console.warn("getNetwork failed:", err);
-    }
-    const chainId = Number(network.chainId || 0);
-    const nativeSymbol =
-      chainId === 56
-        ? "BNB"
-        : chainId === 137
-        ? "MATIC"
-        : chainId === 1
-        ? "ETH"
-        : "NATIVE";
-
-    // Auto-detect USDT contract per chain
-    let tokenAddress = null;
-    if (chainId === 56)
-      tokenAddress = "0x55d398326f99059fF775485246999027B3197955"; // BSC
-    else if (chainId === 137)
-      tokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon
-    else if (chainId === 1)
-      tokenAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // ETH
-
-    let tokenText = "—";
-    if (tokenAddress) {
-      try {
-        const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
-
-        let decimals = 18;
-        try {
-          decimals = Number(await token.decimals());
-        } catch {
-          if (chainId === 56) decimals = 18;
-          if (chainId === 137 || chainId === 1) decimals = 6;
-        }
-
-        let symbol = "USDT";
-        try {
-          symbol = await token.symbol();
-        } catch {}
-
-        const raw = await token.balanceOf(connectedAddress);
-        const formatted = ethers.formatUnits(raw, decimals);
-        tokenText = parseFloat(formatted).toFixed(2) + " " + symbol;
-      } catch (err) {
-        console.error("Token balance error:", err);
-        tokenText = "Error";
-      }
-    }
-
-    if (walletBalanceEl) {
-      let nativeDisplay = nativeText;
-      if (!isNaN(Number(nativeText)))
-        nativeDisplay = parseFloat(nativeText).toFixed(6) + " " + nativeSymbol;
-      walletBalanceEl.innerText = `${nativeDisplay} | ${tokenText}`;
-    }
-  } catch (err) {
-    console.error("refreshBalance failed outer:", err);
-    if (walletBalanceEl) walletBalanceEl.innerText = "Error";
+  } catch (e) {
+    document.getElementById("walletBalance").innerText = "Error fetching";
+    console.error(e);
   }
 }
 
