@@ -35,7 +35,7 @@ class WalletController extends Controller
         return response()->json([
             'ok' => true,
             'wallet_address' => $request->wallet_address,
-            'redirect' => 'https://codeigniter-app.com/dashboard'
+            'redirect' => 'https://earnnfly.com/New/user/index.php/home'
         ]);
     }
 
