@@ -33,79 +33,157 @@ class WalletController extends Controller
             'redirect' => 'https://earnnfly.com/New/user/index.php/home'
         ]);
     }
+public function getBalance(Request $request, $address)
+{
+    $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com');
+    $chainDecimals = 18;
 
-    public function getBalance(Request $request, $address)
-    {
-        $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com');
-        $chainDecimals = 18;
+    $token = $request->query('token');       // optional token contract address
+    $decimalsQuery = $request->query('decimals');
 
-        $token = $request->query('token');
-        $decimalsQuery = $request->query('decimals');
+    // --- Native balance ---
+    $response = Http::post($rpcUrl, [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'eth_getBalance',
+        'params' => [$address, 'latest'],
+    ]);
+    $nativeHex = $response->json('result') ?? '0x0';
 
-        // Native balance
-        $response = Http::post($rpcUrl, [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'eth_getBalance',
-            'params' => [$address, 'latest'],
-        ]);
-        $nativeHex = $response->json('result') ?? '0x0';
+    $nativeWeiStr = $this->hexToDecString($nativeHex);
+    $nativeBalance = $this->formatUnits($nativeWeiStr, $chainDecimals);
 
-        $nativeWeiStr = $this->hexToDecString($nativeHex);
-        $nativeBalance = $this->formatUnits($nativeWeiStr, $chainDecimals);
+    $out = [
+        'ok' => true,
+        'address' => $address,
+        'native' => [
+            'balance_wei' => $nativeWeiStr,
+            'balance' => $nativeBalance,
+            'symbol' => 'MATIC', // since we are on Polygon
+        ],
+    ];
 
-        $out = [
-            'ok' => true,
-            'address' => $address,
-            'native' => [
-                'balance_wei' => $nativeWeiStr,
-                'balance' => $nativeBalance,
-                'symbol' => 'NATIVE',
-            ],
-        ];
+    // --- ERC20 token balance (e.g., USDT) ---
+    if ($token) {
+        $token = strtolower($token);
 
-        // ERC20 token balance
-        if ($token) {
-            $token = strtolower($token);
-            if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
-                $decimals = intval($decimalsQuery);
-            } else {
-                $data = '0x313ce567'; // decimals()
-                $decResp = Http::post($rpcUrl, [
-                    'jsonrpc' => '2.0',
-                    'id' => 1,
-                    'method' => 'eth_call',
-                    'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
-                ]);
-                $decimals = $decResp->json('result') ? hexdec($decResp->json('result')) : 18;
-            }
-
-            $method = '70a08231'; // balanceOf(address)
-            $addr = ltrim(strtolower($address), '0x');
-            $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
-            $data = '0x' . $method . $addr;
-
-            $balResp = Http::post($rpcUrl, [
+        // 1) decimals
+        if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
+            $decimals = intval($decimalsQuery);
+        } elseif ($token === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
+            // hardcode USDT decimals (6) if it's Polygon USDT
+            $decimals = 6;
+        } else {
+            $data = '0x313ce567'; // decimals()
+            $decResp = Http::post($rpcUrl, [
                 'jsonrpc' => '2.0',
                 'id' => 1,
                 'method' => 'eth_call',
                 'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
             ]);
-            $balResult = $balResp->json('result') ?? '0x0';
-
-            $tokenBalanceWeiStr = $this->hexToDecString($balResult);
-            $tokenBalanceFormatted = $this->formatUnits($tokenBalanceWeiStr, $decimals);
-
-            $out['token'] = [
-                'contract' => $token,
-                'decimals' => $decimals,
-                'balance_wei' => $tokenBalanceWeiStr,
-                'balance' => $tokenBalanceFormatted,
-            ];
+            $decResult = $decResp->json('result');
+            $decimals = ($decResult && $decResult !== '0x') ? hexdec($decResult) : 18;
         }
 
-        return response()->json($out);
+        // 2) balanceOf(address)
+        $method = '70a08231';
+        $addr = ltrim(strtolower($address), '0x');
+        $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
+        $data = '0x' . $method . $addr;
+
+        $balResp = Http::post($rpcUrl, [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'eth_call',
+            'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
+        ]);
+        $balResult = $balResp->json('result') ?? '0x0';
+
+        $tokenBalanceWeiStr = $this->hexToDecString($balResult);
+        $tokenBalanceFormatted = $this->formatUnits($tokenBalanceWeiStr, $decimals);
+
+        $out['token'] = [
+            'contract' => $token,
+            'decimals' => $decimals,
+            'balance_wei' => $tokenBalanceWeiStr,
+            'balance' => $tokenBalanceFormatted,
+        ];
     }
+
+    return response()->json($out);
+}
+    // public function getBalance(Request $request, $address)
+    // {
+    //     $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com');
+    //     $chainDecimals = 18;
+
+    //     $token = $request->query('token');
+    //     $decimalsQuery = $request->query('decimals');
+
+    //     // Native balance
+    //     $response = Http::post($rpcUrl, [
+    //         'jsonrpc' => '2.0',
+    //         'id' => 1,
+    //         'method' => 'eth_getBalance',
+    //         'params' => [$address, 'latest'],
+    //     ]);
+    //     $nativeHex = $response->json('result') ?? '0x0';
+
+    //     $nativeWeiStr = $this->hexToDecString($nativeHex);
+    //     $nativeBalance = $this->formatUnits($nativeWeiStr, $chainDecimals);
+
+    //     $out = [
+    //         'ok' => true,
+    //         'address' => $address,
+    //         'native' => [
+    //             'balance_wei' => $nativeWeiStr,
+    //             'balance' => $nativeBalance,
+    //             'symbol' => 'NATIVE',
+    //         ],
+    //     ];
+
+    //     // ERC20 token balance
+    //     if ($token) {
+    //         $token = strtolower($token);
+    //         if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
+    //             $decimals = intval($decimalsQuery);
+    //         } else {
+    //             $data = '0x313ce567'; // decimals()
+    //             $decResp = Http::post($rpcUrl, [
+    //                 'jsonrpc' => '2.0',
+    //                 'id' => 1,
+    //                 'method' => 'eth_call',
+    //                 'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
+    //             ]);
+    //             $decimals = $decResp->json('result') ? hexdec($decResp->json('result')) : 18;
+    //         }
+
+    //         $method = '70a08231'; // balanceOf(address)
+    //         $addr = ltrim(strtolower($address), '0x');
+    //         $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
+    //         $data = '0x' . $method . $addr;
+
+    //         $balResp = Http::post($rpcUrl, [
+    //             'jsonrpc' => '2.0',
+    //             'id' => 1,
+    //             'method' => 'eth_call',
+    //             'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
+    //         ]);
+    //         $balResult = $balResp->json('result') ?? '0x0';
+
+    //         $tokenBalanceWeiStr = $this->hexToDecString($balResult);
+    //         $tokenBalanceFormatted = $this->formatUnits($tokenBalanceWeiStr, $decimals);
+
+    //         $out['token'] = [
+    //             'contract' => $token,
+    //             'decimals' => $decimals,
+    //             'balance_wei' => $tokenBalanceWeiStr,
+    //             'balance' => $tokenBalanceFormatted,
+    //         ];
+    //     }
+
+    //     return response()->json($out);
+    // }
 
     public function showPayPage(Request $r)
     {
