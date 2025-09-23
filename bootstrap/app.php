@@ -43,7 +43,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'verification' => \App\Http\Middleware\Verification::class,
             'customer' => \App\Http\Middleware\Customer::class,
             'user' => \App\Http\Middleware\User::class,
-
+            'cors' => \App\Http\Middleware\Cors::class,
 
         ]);
     })

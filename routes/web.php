@@ -98,10 +98,12 @@ Route::post('pay/cancel', 'CCAvenueController@hdfccancel_url')->name('ccavenue.c
 // Route::any('ccpay/pay', 'CCAvenueController@getResponse')->name('ccavenue.pay');
 // Route::any('ccpay/response', 'CCAvenueController@getResponse')->name('ccavenue.pay');
 
-
+Route::group(['middleware' => 'cors'], function () {
     Route::get('/customer/wallet', 'WalletController@show')->name('customer.wallet.show');
     Route::post('/customer/wallet/save', 'WalletController@save')->name('customer.wallet.save');
     Route::get('/wallet/balance/{address}', 'WalletController@getBalance');
+
+ });
 
 
 Route::group(['middleware' => 'user'], function () {
