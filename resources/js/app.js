@@ -211,18 +211,53 @@ export async function payWithToken() {
       alert("Please connect your wallet first.");
       return;
     }
-    const tokenAddress = window.USDT_CONTRACT;
-    const receiver = window.RECEIVER;
-    const amountStr = window.AMOUNT; // decimal like "1.0"
 
-    if (!tokenAddress || !receiver || !amountStr) {
-      alert("Token address, receiver, or amount missing.");
+    // Detect network & token contract
+    const network = await provider.getNetwork();
+    const chainId = Number(network.chainId);
+
+    let tokenAddress;
+    if (chainId === 137) tokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon USDT
+    else if (chainId === 56) tokenAddress = "0x55d398326f99059fF775485246999027B3197955"; // BSC USDT
+    else if (chainId === 1) tokenAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // Ethereum USDT
+    else tokenAddress = window.USDT_CONTRACT; // fallback if passed from Blade
+
+    if (!tokenAddress) {
+      alert("USDT token address not configured for this chain.");
+      return;
+    }
+
+    const receiver = window.RECEIVER;
+    const amountStr = window.AMOUNT;
+
+    if (!receiver || !amountStr) {
+      alert("Receiver or amount missing.");
       return;
     }
 
     setStatus("Checking balances...");
-    const { token, decimals, symbol } = await getTokenInfo(tokenAddress, signer.provider);
+
+    // Init token
+    const token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+
+    // Try decimals & symbol with safe fallback
+    let decimals = 18;
+    try {
+      decimals = Number(await token.decimals());
+    } catch {
+      if (chainId === 137 || chainId === 1) decimals = 6;
+      if (chainId === 56) decimals = 18;
+    }
+
+    let symbol = "USDT";
+    try {
+      symbol = await token.symbol();
+    } catch {}
+
+    // Convert amount
     const want = ethers.parseUnits(String(amountStr), decimals);
+
+    // Balance check
     const bal = await token.balanceOf(connectedAddress);
     if (bal < want) {
       alert(`Insufficient ${symbol}. Have ${ethers.formatUnits(bal, decimals)}, need ${amountStr}`);
@@ -230,13 +265,13 @@ export async function payWithToken() {
       return;
     }
 
-    // send tx
-    setStatus("Sending token transfer...");
-    const tx = await token.connect(signer).transfer(receiver, want);
+    // Send tx
+    setStatus(`Sending ${amountStr} ${symbol}...`);
+    const tx = await token.transfer(receiver, want);
     setStatus("Tx sent: " + tx.hash + " (waiting 1 conf...)");
     await tx.wait(1);
 
-    // verify with server
+    // Verify with server
     setStatus("Verifying server...");
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
@@ -269,8 +304,8 @@ export async function payWithToken() {
     }
   } catch (err) {
     console.error("payWithToken error:", err);
-    setStatus("payment error: " + (err.message||err), true);
-    alert("Payment error: " + (err.message||err));
+    setStatus("payment error: " + (err.message || err), true);
+    alert("Payment error: " + (err.message || err));
   }
 }
 

@@ -1,6 +1,6 @@
 {
-  "_core-DK1m4-0o.js": {
-    "file": "assets/core-DK1m4-0o.js",
+  "_core-DhaY7THX.js": {
+    "file": "assets/core-DhaY7THX.js",
     "name": "core",
     "isDynamicEntry": true,
     "imports": [
@@ -13,11 +13,11 @@
       "node_modules/@reown/appkit-scaffold-ui/dist/esm/exports/w3m-modal.js"
     ]
   },
-  "_index-7XB4nN1l.js": {
-    "file": "assets/index-7XB4nN1l.js",
+  "_index-C3y1mODD.js": {
+    "file": "assets/index-C3y1mODD.js",
     "name": "index",
     "imports": [
-      "_core-DK1m4-0o.js",
+      "_core-DhaY7THX.js",
       "resources/js/app.js"
     ],
     "dynamicImports": [
@@ -548,49 +548,49 @@
     ]
   },
   "node_modules/@reown/appkit-controllers/dist/esm/exports/features.js": {
-    "file": "assets/features-BdWszZhI.js",
+    "file": "assets/features-BXkG3Dod.js",
     "name": "features",
     "src": "node_modules/@reown/appkit-controllers/dist/esm/exports/features.js",
     "isDynamicEntry": true,
     "imports": [
-      "_core-DK1m4-0o.js",
+      "_core-DhaY7THX.js",
       "resources/js/app.js"
     ]
   },
   "node_modules/@reown/appkit-scaffold-ui/dist/esm/exports/basic.js": {
-    "file": "assets/basic-C1G3oUmi.js",
+    "file": "assets/basic-dc54XfL_.js",
     "name": "basic",
     "src": "node_modules/@reown/appkit-scaffold-ui/dist/esm/exports/basic.js",
     "isDynamicEntry": true,
     "imports": [
-      "_core-DK1m4-0o.js",
-      "_index-7XB4nN1l.js",
+      "_core-DhaY7THX.js",
+      "_index-C3y1mODD.js",
       "resources/js/app.js"
     ]
   },
   "node_modules/@reown/appkit-scaffold-ui/dist/esm/exports/w3m-modal.js": {
-    "file": "assets/w3m-modal-YiiKHnhB.js",
+    "file": "assets/w3m-modal-B4PY-sRQ.js",
     "name": "w3m-modal",
     "src": "node_modules/@reown/appkit-scaffold-ui/dist/esm/exports/w3m-modal.js",
     "isDynamicEntry": true,
     "imports": [
-      "_core-DK1m4-0o.js",
-      "_index-7XB4nN1l.js",
+      "_core-DhaY7THX.js",
+      "_index-C3y1mODD.js",
       "resources/js/app.js"
     ]
   },
   "node_modules/@reown/appkit/node_modules/@walletconnect/utils/node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js": {
-    "file": "assets/secp256k1-BB0S4Vbs.js",
+    "file": "assets/secp256k1-BppvQGoO.js",
     "name": "secp256k1",
     "src": "node_modules/@reown/appkit/node_modules/@walletconnect/utils/node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js",
     "isDynamicEntry": true,
     "imports": [
-      "_core-DK1m4-0o.js",
+      "_core-DhaY7THX.js",
       "resources/js/app.js"
     ]
   },
   "node_modules/@walletconnect/utils/node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js": {
-    "file": "assets/secp256k1-DLBHlgqa.js",
+    "file": "assets/secp256k1-YNBkA8a_.js",
     "name": "secp256k1",
     "src": "node_modules/@walletconnect/utils/node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js",
     "isDynamicEntry": true,
@@ -604,13 +604,13 @@
     "isEntry": true
   },
   "resources/js/app.js": {
-    "file": "assets/app-D-iNQzVi.js",
+    "file": "assets/app-DzhQ2kw0.js",
     "name": "app",
     "src": "resources/js/app.js",
     "isEntry": true,
     "dynamicImports": [
       "node_modules/@walletconnect/utils/node_modules/viem/node_modules/@noble/curves/esm/secp256k1.js",
-      "_core-DK1m4-0o.js"
+      "_core-DhaY7THX.js"
     ]
   }
 }
