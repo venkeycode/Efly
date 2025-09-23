@@ -35,11 +35,36 @@ class WalletController extends Controller
     }
 public function getBalance(Request $request, $address)
 {
-    $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com');
     $chainDecimals = 18;
 
     $token = $request->query('token');       // optional token contract address
     $decimalsQuery = $request->query('decimals');
+
+    // --- Select RPC URL based on token (or default to Polygon) ---
+    $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com'); // fallback
+    $symbol = 'MATIC';
+
+    if ($token) {
+        $t = strtolower($token);
+
+        // USDT on Polygon
+        if ($t === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
+            $rpcUrl = env('RPC_POLYGON', 'https://polygon-rpc.com');
+            $symbol = 'MATIC';
+        }
+
+        // USDT on BSC
+        if ($t === strtolower("0x55d398326f99059fF775485246999027B3197955")) {
+            $rpcUrl = env('RPC_BSC', 'https://bsc-dataseed.binance.org/');
+            $symbol = 'BNB';
+        }
+
+        // USDT on Ethereum
+        if ($t === strtolower("0xdAC17F958D2ee523a2206206994597C13D831ec7")) {
+            $rpcUrl = env('RPC_ETH', 'https://mainnet.infura.io/v3/YOUR_INFURA_KEY');
+            $symbol = 'ETH';
+        }
+    }
 
     // --- Native balance ---
     $response = Http::post($rpcUrl, [
@@ -59,7 +84,7 @@ public function getBalance(Request $request, $address)
         'native' => [
             'balance_wei' => $nativeWeiStr,
             'balance' => $nativeBalance,
-            'symbol' => 'MATIC', // since we are on Polygon
+            'symbol' => $symbol,
         ],
     ];
 
@@ -71,18 +96,21 @@ public function getBalance(Request $request, $address)
         if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
             $decimals = intval($decimalsQuery);
         } elseif ($token === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
-            // hardcode USDT decimals (6) if it's Polygon USDT
-            $decimals = 6;
+            $decimals = 6; // Polygon USDT
+        } elseif ($token === strtolower("0xdAC17F958D2ee523a2206206994597C13D831ec7")) {
+            $decimals = 6; // Ethereum USDT
+        } elseif ($token === strtolower("0x55d398326f99059fF775485246999027B3197955")) {
+            $decimals = 18; // BSC USDT
         } else {
-            $data = '0x313ce567'; // decimals()
+            // fallback call decimals()
+            $data = '0x313ce567';
             $decResp = Http::post($rpcUrl, [
                 'jsonrpc' => '2.0',
                 'id' => 1,
                 'method' => 'eth_call',
                 'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
             ]);
-            $decResult = $decResp->json('result');
-            $decimals = ($decResult && $decResult !== '0x') ? hexdec($decResult) : 18;
+            $decimals = $decResp->json('result') ? hexdec($decResp->json('result')) : 18;
         }
 
         // 2) balanceOf(address)
