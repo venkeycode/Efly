@@ -1,10 +1,19 @@
+// resources/js/app.js
 import { ethers } from "ethers";
 import EthereumProvider from "@walletconnect/ethereum-provider";
 
-// Config
+/**
+ * Config
+ */
 const PROJECT_ID = import.meta.env.VITE_WC_PROJECT_ID || "611536788e4297012ef34993004d5565";
-const CHAIN_IDS = [(Number(import.meta.env.VITE_CHAIN_ID) || 56)]; // ✅ BSC default
-// ERC-20 ABI minimal
+const CHAIN_IDS = [Number(import.meta.env.VITE_CHAIN_ID) || 56]; // default BSC mainnet
+const RPC_MAP = {
+  56: "https://bsc-dataseed.binance.org/",
+  137: "https://polygon-rpc.com",
+  1: "https://rpc.ankr.com/eth"
+};
+
+// Minimal ERC20 ABI
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
@@ -12,94 +21,164 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 value) returns (bool)"
 ];
 
-// DOM elements
-const walletAddrEl = document.getElementById("walletAddr");
-const walletBalanceEl = document.getElementById("walletBalance");
-const statusEl = document.getElementById("status");
-const payBtn = document.getElementById("payBtn");
-
-// State
-let provider = null;
+/**
+ * State
+ */
+let wcProvider = null;     // WalletConnect raw provider
+let provider = null;       // ethers BrowserProvider
 let signer = null;
 let connectedAddress = null;
 
-// Helpers
+/**
+ * DOM elements (populated on DOMContentLoaded)
+ */
+let walletAddrEl = null;
+let walletBalanceEl = null;
+let statusEl = null;
+let payBtn = null;
+let reconnectBtn = null;
+
+/**
+ * Helpers
+ */
 function setStatus(text, isError = false) {
   if (!statusEl) return;
   statusEl.innerText = `Status: ${text}`;
   statusEl.style.color = isError ? "crimson" : "";
 }
-function normalizeAddress(a = "") {
-  try { return (a || "").toLowerCase(); } catch { return ("" + a).toLowerCase(); }
+function normalize(a='') { try { return (a||'').toLowerCase(); } catch { return String(a).toLowerCase(); } }
+function getUsdtForChain(chainId) {
+  if (chainId === 56) return "0x55d398326f99059fF775485246999027B3197955"; // BSC USDT (18)
+  if (chainId === 137) return "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon USDT (6)
+  if (chainId === 1) return "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // ETH USDT (6)
+  return null;
 }
 
-// --- Connect ---
-export async function connectWalletConnect() {
-  try {
-    setStatus("connecting...");
-const ethProvider = await EthereumProvider.init({
-  projectId: PROJECT_ID,
-  chains: [137], // polygon
-  showQrModal: true,
-  optionalChains: [56, 1], // allow BSC and ETH too
-  rpcMap: {
-    137: "https://polygon-rpc.com",
-    56: "https://bsc-dataseed.binance.org/",
-    1: "https://eth.llamarpc.com"
-  }
-});
-    await ethProvider.enable();
+/**
+ * Initialize DOM refs once page loads
+ */
+function initDom() {
+  walletAddrEl = document.getElementById("walletAddr");
+  walletBalanceEl = document.getElementById("walletBalance");
+  statusEl = document.getElementById("status");
+  payBtn = document.getElementById("payBtn");
+  reconnectBtn = document.getElementById("reconnectBtn");
+}
 
-    provider = new ethers.BrowserProvider(ethProvider);
+/**
+ * Create & init WalletConnect provider
+ * showQrModal: boolean -> whether to open QR (true) or try silent restore (false)
+ */
+async function initWcProvider({ showQrModal = false } = {}) {
+  // Use the CHAIN_IDS constant so the config is consistent
+  const cfg = {
+    projectId: PROJECT_ID,
+    chains: CHAIN_IDS,
+    showQrModal,
+    rpcMap: RPC_MAP,
+    optionalChains: [137, 1]
+  };
+
+  // init() returns object with enable()
+  const ethProv = await EthereumProvider.init(cfg);
+  return ethProv;
+}
+
+/**
+ * Try to restore an existing WalletConnect session silently (no QR).
+ * If success, sets provider/signer/connectedAddress and updates UI.
+ */
+export async function restoreSession() {
+  setStatus("restoring session...");
+  try {
+    wcProvider = await initWcProvider({ showQrModal: false });
+    // enable resolves only if session exists
+    await wcProvider.enable();
+
+    provider = new ethers.BrowserProvider(wcProvider);
     signer = await provider.getSigner();
     connectedAddress = await signer.getAddress();
 
     if (walletAddrEl) walletAddrEl.innerText = connectedAddress;
     setStatus("connected: " + connectedAddress);
     if (payBtn) payBtn.disabled = false;
+    if (reconnectBtn) reconnectBtn.style.display = "none";
 
+    // start balance refresh and listen for blocks
     await refreshBalance();
-    provider.on("block", () => refreshBalance());
+    try { provider.on("block", () => refreshBalance()); } catch(e){}
 
-    // Save wallet
-    try {
-      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
-      const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
-      if (csrf && window.USER_ID) {
-        const saveResp = await fetch("/customer/wallet/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-CSRF-TOKEN": csrf, "Accept": "application/json" },
-          body: JSON.stringify({ wallet_address: connectedAddress, user_id: window.USER_ID })
-        });
-        const saveJson = await saveResp.json();
-        if (!saveJson.ok) setStatus("connected (save failed)", true);
-        else setStatus("connected & saved");
-      }
-    } catch (e) {
-      console.warn("wallet save error:", e);
-    }
-
-    // Check against saved wallet
+    // check saved wallet mismatch (if blade provided SAVED_WALLET)
     if (window.SAVED_WALLET) {
-      const saved = normalizeAddress(window.SAVED_WALLET);
-      if (normalizeAddress(connectedAddress) !== saved) {
-        setStatus("Connected address differs from saved wallet", true);
+      const saved = normalize(window.SAVED_WALLET);
+      if (normalize(connectedAddress) !== saved) {
+        setStatus("Connected account differs from saved wallet", true);
         if (payBtn) payBtn.disabled = true;
       }
     }
 
     return connectedAddress;
   } catch (err) {
-    console.error("connectWalletConnect failed:", err);
+    console.warn("restoreSession failed:", err);
+    setStatus("no active wallet session");
+    if (reconnectBtn) reconnectBtn.style.display = "inline-block";
+    if (payBtn) payBtn.disabled = true;
+    return null;
+  }
+}
+
+/**
+ * Open WalletConnect QR for fresh connect
+ */
+export async function openConnectQr() {
+  setStatus("opening WalletConnect QR...");
+  try {
+    wcProvider = await initWcProvider({ showQrModal: true });
+    await wcProvider.enable();
+
+    provider = new ethers.BrowserProvider(wcProvider);
+    signer = await provider.getSigner();
+    connectedAddress = await signer.getAddress();
+
+    if (walletAddrEl) walletAddrEl.innerText = connectedAddress;
+    setStatus("connected: " + connectedAddress);
+    if (payBtn) payBtn.disabled = false;
+    if (reconnectBtn) reconnectBtn.style.display = "none";
+
+    // optionally save connected wallet to server (if user_id present)
+    try {
+      if (window.USER_ID) {
+        const csrf = document.querySelector('meta[name="csrf-token"]').content;
+        await fetch("/customer/wallet/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-TOKEN": csrf, "Accept": "application/json" },
+          body: JSON.stringify({ wallet_address: connectedAddress, user_id: window.USER_ID })
+        });
+      }
+    } catch (e) {
+      console.warn("Failed to save wallet to server:", e);
+    }
+
+    await refreshBalance();
+    try { provider.on("block", () => refreshBalance()); } catch(e){}
+    return connectedAddress;
+  } catch (err) {
+    console.error("openConnectQr error:", err);
     setStatus("connect failed: " + (err.message || err), true);
     throw err;
   }
 }
 
-// --- Refresh balances (BNB + USDT) ---
-// --- Refresh balances (native + token) ---
-// --- Robust refreshBalance() to avoid BAD_DATA decode errors ---
-// --- Robust refreshBalance() (auto-detect USDT per chain) ---
+/**
+ * Connect flow (explicit) - calls QR and returns address
+ */
+export async function connectWalletConnect() {
+  return await openConnectQr();
+}
+
+/**
+ * Robust refreshBalance: reads native balance and token (USDT) safely
+ */
 export async function refreshBalance() {
   try {
     if (!provider || !connectedAddress) {
@@ -107,104 +186,71 @@ export async function refreshBalance() {
       return;
     }
 
-    // Native balance + detect chain
-    let nativeText = "—";
+    // Native balance
+    let nativeDisplay = "—";
     try {
       const balWei = await provider.getBalance(connectedAddress);
-      nativeText = parseFloat(ethers.formatEther(balWei)).toFixed(6); // as string
+      const network = await provider.getNetwork();
+      const nativeSymbol = network.chainId === 56 ? "BNB" : network.chainId === 137 ? "MATIC" : network.chainId === 1 ? "ETH" : "NATIVE";
+      nativeDisplay = parseFloat(ethers.formatEther(balWei)).toFixed(6) + " " + nativeSymbol;
     } catch (err) {
-      console.error("Native balance read failed:", err);
-      nativeText = "Error";
+      console.warn("native read failed:", err);
+      nativeDisplay = "Error";
     }
 
-    let network;
+    // Token (auto-detect USDT per chain)
+    let tokenDisplay = "—";
     try {
-      network = await provider.getNetwork();
-    } catch (err) {
-      console.warn("getNetwork failed:", err);
-      network = { chainId: null, name: "unknown" };
-    }
-    const chainId = Number(network.chainId || 0);
-    const nativeSymbol = chainId === 56 ? "BNB" : chainId === 137 ? "MATIC" : chainId === 1 ? "ETH" : "NATIVE";
+      const network = await provider.getNetwork();
+      const chainId = Number(network.chainId || 0);
+      const tokenAddr = getUsdtForChain(chainId) || window.USDT_CONTRACT || null;
 
-    // pick USDT token per chain (auto)
-    let tokenAddress = null;
-    if (chainId === 137) tokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon
-    else if (chainId === 56) tokenAddress = "0x55d398326f99059fF775485246999027B3197955"; // BSC
-    else if (chainId === 1) tokenAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // ETH
-    else tokenAddress = window.USDT_CONTRACT || null; // fallback to override
-
-    // token balance safe-read
-    let tokenText = "—";
-    if (tokenAddress) {
-      try {
-        const code = await provider.getCode(tokenAddress);
+      if (!tokenAddr) {
+        tokenDisplay = "No token configured";
+      } else {
+        const code = await provider.getCode(tokenAddr).catch(()=> "0x");
         if (!code || code === "0x" || code === "0x0") {
-          tokenText = "Token not on chain";
+          tokenDisplay = "Token not on chain";
         } else {
-          const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+          const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
 
-          // decimals (safe)
+          // decimals safe
           let decimals = 18;
-          try {
-            const d = await token.decimals();
-            decimals = Number(d) || decimals;
-          } catch (err) {
-            // fallback heuristics for USDT
+          try { decimals = Number(await token.decimals()) || decimals; } catch (e) {
             if (chainId === 137 || chainId === 1) decimals = 6;
-            else if (chainId === 56) decimals = 18;
-            console.warn("decimals() failed, fallback to", decimals, err);
+            if (chainId === 56) decimals = 18;
+            console.warn("decimals fallback used:", decimals, e);
           }
 
-          // symbol (safe)
           let symbol = "TOKEN";
-          try { symbol = await token.symbol(); } catch (_){}
+          try { symbol = await token.symbol(); } catch (e){}
 
-          // balanceOf (safe)
           let raw = null;
-          try {
-            raw = await token.balanceOf(connectedAddress);
-          } catch (err) {
-            console.warn("balanceOf failed:", err);
-            raw = null;
-          }
+          try { raw = await token.balanceOf(connectedAddress); } catch (e) { raw = null; console.warn("balanceOf failed:", e); }
 
-          if (raw === null) {
-            tokenText = `0 ${symbol}`;
-          } else {
+          if (raw === null) tokenDisplay = `0 ${symbol}`;
+          else {
             const formatted = ethers.formatUnits(raw, decimals);
-            tokenText = parseFloat(formatted).toFixed(decimals === 6 ? 2 : 2) + " " + symbol;
+            tokenDisplay = parseFloat(formatted).toFixed(decimals === 6 ? 2 : 2) + " " + symbol;
           }
         }
-      } catch (err) {
-        console.error("Token fetch flow failed:", err);
-        tokenText = "Error";
       }
-    } else {
-      tokenText = "No token configured";
+    } catch (err) {
+      console.error("token read failed:", err);
+      tokenDisplay = "Error";
     }
 
-    // update UI
-    if (walletBalanceEl) {
-      let nativeDisplay = nativeText;
-      if (!isNaN(Number(nativeText))) nativeDisplay = parseFloat(nativeText).toFixed(6) + " " + nativeSymbol;
-      walletBalanceEl.innerText = `${nativeDisplay}  |  ${tokenText}`;
-    }
+    if (walletBalanceEl) walletBalanceEl.innerText = `${nativeDisplay}  |  ${tokenDisplay}`;
+    setStatus("balance updated");
   } catch (err) {
-    console.error("refreshBalance failed outer:", err);
+    console.error("refreshBalance outer failed:", err);
     if (walletBalanceEl) walletBalanceEl.innerText = "Error";
   }
 }
 
-// --- ERC20 helpers ---
-async function getTokenInfo(tokenAddress, provider) {
-  const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
-  const decimals = await token.decimals().catch(()=>18);
-  const symbol = await token.symbol().catch(()=>"TOKEN");
-  return { token, decimals, symbol };
-}
-
-// --- Pay with token (USDT) ---
+/**
+ * payWithToken: detect token by chain, check balances, check gas, send transfer and call server verify.
+ */
 export async function payWithToken() {
   try {
     if (!signer || !connectedAddress) {
@@ -212,24 +258,16 @@ export async function payWithToken() {
       return;
     }
 
-    // Detect network & token contract
-    const network = await provider.getNetwork();
-    const chainId = Number(network.chainId);
-
-    let tokenAddress;
-    if (chainId === 137) tokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon USDT
-    else if (chainId === 56) tokenAddress = "0x55d398326f99059fF775485246999027B3197955"; // BSC USDT
-    else if (chainId === 1) tokenAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // Ethereum USDT
-    else tokenAddress = window.USDT_CONTRACT; // fallback if passed from Blade
-
+    const net = await provider.getNetwork();
+    const chainId = Number(net.chainId);
+    const tokenAddress = getUsdtForChain(chainId) || window.USDT_CONTRACT;
     if (!tokenAddress) {
-      alert("USDT token address not configured for this chain.");
+      alert("Token not configured for this chain. Switch network or contact admin.");
       return;
     }
 
     const receiver = window.RECEIVER;
     const amountStr = window.AMOUNT;
-
     if (!receiver || !amountStr) {
       alert("Receiver or amount missing.");
       return;
@@ -237,47 +275,53 @@ export async function payWithToken() {
 
     setStatus("Checking balances...");
 
-    // Init token
-    const token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+    const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+    const tokenWithSigner = token.connect(signer);
 
-    // Try decimals & symbol with safe fallback
+    // decimals fallback
     let decimals = 18;
-    try {
-      decimals = Number(await token.decimals());
-    } catch {
+    try { decimals = Number(await token.decimals()); } catch (e) {
       if (chainId === 137 || chainId === 1) decimals = 6;
       if (chainId === 56) decimals = 18;
     }
 
-    let symbol = "USDT";
-    try {
-      symbol = await token.symbol();
-    } catch {}
-
-    // Convert amount
     const want = ethers.parseUnits(String(amountStr), decimals);
 
-    // Balance check
+    // balance check
     const bal = await token.balanceOf(connectedAddress);
     if (bal < want) {
-      alert(`Insufficient ${symbol}. Have ${ethers.formatUnits(bal, decimals)}, need ${amountStr}`);
-      setStatus("Insufficient token balance", true);
+      alert(`Insufficient token balance. Have ${ethers.formatUnits(bal, decimals)}, need ${amountStr}`);
+      setStatus("Insufficient token", true);
       return;
     }
 
-    // Send tx
-    setStatus(`Sending ${amountStr} ${symbol}...`);
-    const tx = await token.transfer(receiver, want);
+    // gas / native balance check
+    let gasLimit;
+    try { gasLimit = await tokenWithSigner.estimateGas.transfer(receiver, want); } catch (e) { gasLimit = 150000n; }
+    const feeData = await provider.getFeeData();
+    const gasPriceRaw = feeData.maxFeePerGas ?? feeData.gasPrice ?? ethers.parseUnits("5", "gwei");
+    const gasPrice = BigInt(gasPriceRaw.toString());
+    const estimatedFee = gasPrice * BigInt(gasLimit);
+    const nativeBal = await provider.getBalance(connectedAddress);
+    if (nativeBal < estimatedFee) {
+      alert("Insufficient native token (BNB/ETH/MATIC) for gas. Please top up gas token.");
+      setStatus("Insufficient native for gas", true);
+      return;
+    }
+
+    // send tx
+    setStatus(`Sending ${amountStr} ... confirm in wallet`);
+    const tx = await tokenWithSigner.transfer(receiver, want);
     setStatus("Tx sent: " + tx.hash + " (waiting 1 conf...)");
     await tx.wait(1);
 
-    // Verify with server
-    setStatus("Verifying server...");
+    // verify with backend
+    setStatus("Verifying transaction with server...");
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
     const resp = await fetch("/api/payment/verify-token", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(csrf ? { "X-CSRF-TOKEN": csrf } : {}) },
+      headers: { "Content-Type":"application/json", ...(csrf?{"X-CSRF-TOKEN":csrf}:{}) },
       body: JSON.stringify({
         user_id: window.USER_ID,
         token_contract: tokenAddress,
@@ -290,18 +334,18 @@ export async function payWithToken() {
     const j = await resp.json();
     if (j.ok) {
       setStatus("Payment verified ✔");
+      alert("Payment success: " + tx.hash);
       if (window.RETURN_URL) {
         const u = new URL(window.RETURN_URL);
         u.searchParams.set("user_id", window.USER_ID);
         u.searchParams.set("tx", tx.hash);
         window.location.href = u.toString();
-      } else {
-        alert("Payment success: " + tx.hash);
       }
     } else {
       setStatus("Verification failed", true);
       alert("Verify failed: " + (j.error || JSON.stringify(j)));
     }
+
   } catch (err) {
     console.error("payWithToken error:", err);
     setStatus("payment error: " + (err.message || err), true);
@@ -309,7 +353,27 @@ export async function payWithToken() {
   }
 }
 
-// Expose to Blade
-window.connectWalletConnect = connectWalletConnect;
-window.refreshBalance = refreshBalance;
-window.payWithToken = payWithToken;
+/**
+ * DOM ready: wire up and try restoring session if saved wallet exists
+ */
+document.addEventListener("DOMContentLoaded", async () => {
+  initDom();
+
+  // Expose debug functions on window
+  window.connectWalletConnect = connectWalletConnect;
+  window.refreshBalance = refreshBalance;
+  window.payWithToken = payWithToken;
+  window.restoreSession = restoreSession;
+  window.openConnectQr = openConnectQr;
+
+  // If there is a saved wallet in DB, try to silently restore session
+  if (window.SAVED_WALLET) {
+    try {
+      await restoreSession();
+    } catch(e){
+      console.warn("silent restore failed", e);
+    }
+  } else {
+    setStatus("no saved wallet");
+  }
+});
