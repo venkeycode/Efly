@@ -1,4 +1,4 @@
-<button onclick="payWithToken()" id="payBtn" disabled>Pay Subscription</button>
+<button onclick="payWithToken()" id="payBtn">Pay Subscription</button>
 
 <script>
 async function payWithToken() {
