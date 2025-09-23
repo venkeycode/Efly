@@ -93,6 +93,7 @@ export async function connectWalletConnect() {
 // --- Refresh balances (BNB + USDT) ---
 // --- Refresh balances (native + token) ---
 // --- Robust refreshBalance() to avoid BAD_DATA decode errors ---
+// --- Robust refreshBalance() (auto-detect USDT per chain) ---
 export async function refreshBalance() {
   try {
     if (!provider || !connectedAddress) {
@@ -100,12 +101,11 @@ export async function refreshBalance() {
       return;
     }
 
-    // 1) native balance + network
+    // Native balance + detect chain
     let nativeText = "—";
-    let tokenText = "—";
     try {
       const balWei = await provider.getBalance(connectedAddress);
-      nativeText = parseFloat(ethers.formatEther(balWei)).toFixed(6);
+      nativeText = parseFloat(ethers.formatEther(balWei)).toFixed(6); // as string
     } catch (err) {
       console.error("Native balance read failed:", err);
       nativeText = "Error";
@@ -118,92 +118,68 @@ export async function refreshBalance() {
       console.warn("getNetwork failed:", err);
       network = { chainId: null, name: "unknown" };
     }
-    const chainId = Number(network.chainId);
-    // human native symbol per known chain
+    const chainId = Number(network.chainId || 0);
     const nativeSymbol = chainId === 56 ? "BNB" : chainId === 137 ? "MATIC" : chainId === 1 ? "ETH" : "NATIVE";
 
-    // 2) choose token contract for chain (auto-detect)
+    // pick USDT token per chain (auto)
     let tokenAddress = null;
-    if (chainId === 137) {
-      tokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon USDT
-    } else if (chainId === 56) {
-      tokenAddress = "0x55d398326f99059fF775485246999027B3197955"; // BSC USDT
-    } else if (chainId === 1) {
-      tokenAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // Ethereum USDT
-    } else {
-      // fallback to any provided global override
-      tokenAddress = window.USDT_CONTRACT || null;
-    }
+    if (chainId === 137) tokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Polygon
+    else if (chainId === 56) tokenAddress = "0x55d398326f99059fF775485246999027B3197955"; // BSC
+    else if (chainId === 1) tokenAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // ETH
+    else tokenAddress = window.USDT_CONTRACT || null; // fallback to override
 
-    // 3) token: only attempt if we have an address AND the contract exists on chain
+    // token balance safe-read
+    let tokenText = "—";
     if (tokenAddress) {
       try {
-        // 3a) ensure contract exists on chain (avoid calling non-existent contract)
         const code = await provider.getCode(tokenAddress);
         if (!code || code === "0x" || code === "0x0") {
-          console.warn("Token contract not found on this chain:", tokenAddress, "code:", code);
-          tokenText = "Token not deployed on this chain";
+          tokenText = "Token not on chain";
         } else {
-          // 3b) safe contract calls with per-call catch
           const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
 
-          // decimals
+          // decimals (safe)
           let decimals = 18;
           try {
             const d = await token.decimals();
-            // some tokens return BigInt-like, some number — normalize
             decimals = Number(d) || decimals;
           } catch (err) {
-            console.warn("decimals() failed, defaulting to 18 (or use chain-specific overrides):", err);
-            // override known USDT decimals per chain
-            if (chainId === 137 || chainId === 1) decimals = 6; // polygon/eth USDT = 6
-            if (chainId === 56) decimals = 18; // BSC USDT in your detector used 18
+            // fallback heuristics for USDT
+            if (chainId === 137 || chainId === 1) decimals = 6;
+            else if (chainId === 56) decimals = 18;
+            console.warn("decimals() failed, fallback to", decimals, err);
           }
 
-          // symbol
+          // symbol (safe)
           let symbol = "TOKEN";
-          try {
-            symbol = await token.symbol();
-          } catch (_) { /* ignore */ }
+          try { symbol = await token.symbol(); } catch (_){}
 
-          // balanceOf
-          let rawBal = null;
+          // balanceOf (safe)
+          let raw = null;
           try {
-            rawBal = await token.balanceOf(connectedAddress);
+            raw = await token.balanceOf(connectedAddress);
           } catch (err) {
-            // sometimes provider returns empty data -> catch and handle
-            console.error("balanceOf() call failed (likely wrong contract/chain):", err);
-            rawBal = null;
+            console.warn("balanceOf failed:", err);
+            raw = null;
           }
 
-          if (rawBal === null) {
-            tokenText = `0 ${symbol}`; // show 0 rather than throw
+          if (raw === null) {
+            tokenText = `0 ${symbol}`;
           } else {
-            // format units safely
-            let formatted = "0";
-            try {
-              formatted = ethers.formatUnits(rawBal, decimals);
-            } catch (err) {
-              console.warn("formatUnits failed:", err);
-              // fallback: try dividing manually (careful with precision) — show raw as fallback
-              formatted = rawBal.toString();
-            }
-            // show with safe decimal places
-            const decimalsToShow = decimals === 6 ? 2 : 2;
-            tokenText = parseFloat(formatted).toFixed(decimalsToShow) + " " + symbol;
+            const formatted = ethers.formatUnits(raw, decimals);
+            tokenText = parseFloat(formatted).toFixed(decimals === 6 ? 2 : 2) + " " + symbol;
           }
         }
       } catch (err) {
-        console.error("Token read flow failed:", err);
+        console.error("Token fetch flow failed:", err);
         tokenText = "Error";
       }
     } else {
       tokenText = "No token configured";
     }
 
-    // 4) update UI (use nativeSymbol)
+    // update UI
     if (walletBalanceEl) {
-      // choose readable nativeText (if numeric, format)
       let nativeDisplay = nativeText;
       if (!isNaN(Number(nativeText))) nativeDisplay = parseFloat(nativeText).toFixed(6) + " " + nativeSymbol;
       walletBalanceEl.innerText = `${nativeDisplay}  |  ${tokenText}`;
