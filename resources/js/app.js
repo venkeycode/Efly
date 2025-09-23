@@ -37,11 +37,17 @@ function normalizeAddress(a = "") {
 export async function connectWalletConnect() {
   try {
     setStatus("connecting...");
-    const ethProvider = await EthereumProvider.init({
-      projectId: PROJECT_ID,
-      chains: CHAIN_IDS,
-      showQrModal: true,
-    });
+const ethProvider = await EthereumProvider.init({
+  projectId: PROJECT_ID,
+  chains: [137], // polygon
+  showQrModal: true,
+  optionalChains: [56, 1], // allow BSC and ETH too
+  rpcMap: {
+    137: "https://polygon-rpc.com",
+    56: "https://bsc-dataseed.binance.org/",
+    1: "https://eth.llamarpc.com"
+  }
+});
     await ethProvider.enable();
 
     provider = new ethers.BrowserProvider(ethProvider);
