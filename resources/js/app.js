@@ -57,13 +57,16 @@ function normalize(a='') { try { return (a||'').toLowerCase(); } catch { return 
 /*
   Initialize WalletConnect provider
 */
-async function initWcProvider({ showQrModal=false } = {}) {
+// use only BSC (56) here so WalletConnect relay won't try to register polygon
+async function initWcProvider({ showQrModal = false } = {}) {
   return await EthereumProvider.init({
     projectId: PROJECT_ID,
-    chains: CHAIN_IDS,
+    chains: [56],               // IMPORTANT: only include the chains you actually need
     showQrModal,
-    rpcMap: RPC_MAP,
-    optionalChains: [137, 1], // allow other chains if user wants
+    rpcMap: {
+      56: "https://bsc-dataseed.binance.org/",
+    },
+    optionalChains: []         // leave empty to avoid unexpected chain registration
   });
 }
 
@@ -75,18 +78,17 @@ async function initWcProvider({ showQrModal=false } = {}) {
 async function trySwitchToChain(ethProvider, targetChainId = 56) {
   const hex = "0x" + Number(targetChainId).toString(16);
 
-  // helper to call EIP-1193 style `.request`
   async function tryRequest(obj) {
     if (!obj) return false;
     try {
+      // EIP-1193 standard
       if (typeof obj.request === "function") {
         await obj.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
         return true;
       }
-      // some older providers use send(method, params)
+
+      // fallback: send(method, params) - some providers implement this
       if (typeof obj.send === "function") {
-        // some .send(...) implementations take (method, params)
-        // others take (payload, callback) - we try the simple form first
         try {
           await obj.send("wallet_switchEthereumChain", [{ chainId: hex }]);
           return true;
@@ -100,12 +102,10 @@ async function trySwitchToChain(ethProvider, targetChainId = 56) {
               );
             });
             return true;
-          } catch (e2) {
-            // fall through
-          }
+          } catch (e2) { /* fallthrough */ }
         }
       }
-      // some providers expose sendAsync
+
       if (typeof obj.sendAsync === "function") {
         await new Promise((resolve, reject) => {
           obj.sendAsync(
@@ -116,31 +116,22 @@ async function trySwitchToChain(ethProvider, targetChainId = 56) {
         return true;
       }
     } catch (err) {
-      // request failed for this object
-      // console.warn("tryRequest failed on object", err);
       return false;
     }
     return false;
   }
 
-  // Try multiple likely objects in order:
-  // 1) the raw walletConnect provider object (wcProvider)
-  // 2) provider.provider (ethers BrowserProvider wraps underlying)
-  // 3) the provider itself (sometimes BrowserProvider has request, sometimes not)
+  // Try likely objects in order
   const candidates = [ethProvider, wcProvider, (provider && provider.provider), provider];
-
   for (const cand of candidates) {
     if (!cand) continue;
     try {
       const ok = await tryRequest(cand);
       if (ok) return true;
     } catch (e) {
-      // ignore and try next candidate
-      console.warn("chain switch attempt failed for candidate:", e);
+      // ignore and try next
     }
   }
-
-  // nothing worked
   return false;
 }
 /*
@@ -149,40 +140,16 @@ async function trySwitchToChain(ethProvider, targetChainId = 56) {
   - if fails, shows instruction to user (manual switch + reconnect)
 */
 async function ensureBscFlow() {
-  if (!provider) {
-    setStatus("No provider available", true);
-    return false;
-  }
-
-  try {
-    let net = null;
-    try { net = await provider.getNetwork(); } catch (e) { net = { chainId: null }; }
-    const chainId = Number(net.chainId || 0);
-    if (chainId === 56) {
-      setStatus("On BSC");
-      return true;
-    }
-
-    setStatus(`Detected chain ${chainId||'unknown'}. Attempting to switch to BSC...`);
-    // If we have the raw WalletConnect provider (wcProvider), call switch on that, otherwise use provider.send
-    const ethProvider = wcProvider || provider.provider || provider;
-    const ok = await trySwitchToChain(ethProvider, 56);
-    if (ok) {
-      // small wait for wallet to settle
-      await new Promise(r => setTimeout(r, 700));
-      setStatus("Switched to BSC");
-      return true;
-    }
-
-    // fallback: tell user to manually switch and reconnect
-    setStatus("Please switch your wallet to BNB Smart Chain (BSC) manually and reconnect.", true);
+  const ok = await trySwitchToChain(wcProvider || (provider && provider.provider) || provider, 56);
+  if (!ok) {
+    setStatus("Please switch your wallet to BSC manually and reconnect.", true);
     if (reconnectBtn) reconnectBtn.style.display = "inline-block";
     return false;
-  } catch (err) {
-    console.error("ensureBscFlow error:", err);
-    setStatus("Network check failed", true);
-    return false;
   }
+  // optional small wait to let provider update
+  await new Promise(r => setTimeout(r, 700));
+  setStatus("Switched to BSC");
+  return true;
 }
 
 /*
