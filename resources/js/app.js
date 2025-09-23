@@ -4,8 +4,7 @@ import EthereumProvider from "@walletconnect/ethereum-provider";
 
 // Config
 const PROJECT_ID = import.meta.env.VITE_WC_PROJECT_ID || "611536788e4297012ef34993004d5565";
-const CHAIN_IDS = [(Number(import.meta.env.VITE_CHAIN_ID) || 137)]; // Polygon default
-
+const CHAIN_IDS = [(Number(import.meta.env.VITE_CHAIN_ID) || 56)];
 // ERC-20 ABI minimal
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",

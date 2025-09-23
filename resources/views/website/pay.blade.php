@@ -14,8 +14,11 @@
 <script>
   window.USER_ID = "{{ $userId }}";
   window.AMOUNT = "1.0"; // USDT amount
-  window.RECEIVER = "0xReceiverWalletHere";
-  window.USDT_CONTRACT = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // USDT contract (Ethereum mainnet example)
+  window.RECEIVER = "0xYourReceiverWalletHere";
+  // BSC USDT (wrapped Tether on BSC)
+  window.USDT_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
+  // optional: RETURN_URL back to CI
+  window.RETURN_URL = "{{ $returnUrl ?? '' }}";
 </script>
 
 <button onclick="connectWalletConnect()">Connect Wallet</button>
