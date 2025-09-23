@@ -232,7 +232,7 @@ public function showPayPage(Request $r)
         ->value('wallet_address');
 
     $token = env('USDT_CONTRACT');        // e.g. Polygon USDT contract
-    $receiver = env('RECEIVER_WALLET');   // your receiver wallet
+    $receiver ='0x8Ab8a499Ca0Ae83A62Aa93397CA9fbDC7Cec9e5A';// env('RECEIVER_WALLET');   // your receiver wallet
 
     return view('website.pay', compact('userId','amount','return','savedWallet','token','receiver'));
 }
