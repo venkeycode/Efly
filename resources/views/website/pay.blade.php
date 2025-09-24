@@ -62,6 +62,7 @@
   <!-- Expose JS config BEFORE loading app.js -->
   <script>
     window.USER_ID      = {!! json_encode($userId ?? null) !!};
+    window.PLAN_ID      = {!! json_encode($plan_id ?? null) !!};
     window.SAVED_WALLET = {!! json_encode($saved ?? null) !!};
     window.AMOUNT       = {!! json_encode($amount ?? '1') !!};
     window.RECEIVER     = {!! json_encode($receiver ?? env('RECEIVER_WALLET', null)) !!};

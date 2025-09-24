@@ -225,6 +225,7 @@ public function showPayPage(Request $r)
 {
     $userId = $r->query('user_id');
     $amount = $r->query('amount');
+    $plan_id = $r->query('plan_id');
     $return = 'https://earnnfly.com/New/user/index.php/home';//$r->query('return');
 
     $savedWallet = DB::table('customdetails')
@@ -234,7 +235,7 @@ public function showPayPage(Request $r)
     $token = env('USDT_CONTRACT');        // e.g. Polygon USDT contract
     $receiver ='0x8Ab8a499Ca0Ae83A62Aa93397CA9fbDC7Cec9e5A';// env('RECEIVER_WALLET');   // your receiver wallet
 
-    return view('website.pay', compact('userId','amount','return','savedWallet','token','receiver'));
+    return view('website.pay', compact('userId','amount','return','savedWallet','token','receiver','plan_id'));
 }
     /**
      * ✅ Verify ERC20 (USDT) payment

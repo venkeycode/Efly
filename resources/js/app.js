@@ -372,6 +372,7 @@ export async function payWithToken() {
       if (window.RETURN_URL) {
         const u = new URL(window.RETURN_URL);
         u.searchParams.set("user_id", window.USER_ID);
+        u.searchParams.set("plan_id", window.PLAN_ID);
         u.searchParams.set("tx", tx.hash);
         window.location.href = u.toString();
       } else {
