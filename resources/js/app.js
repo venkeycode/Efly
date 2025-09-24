@@ -251,76 +251,110 @@ export async function payWithToken() {
     if (!receiver)  { alert("Receiver wallet not configured."); return; }
     if (!amountStr || Number(amountStr) <= 0) { alert("Payment amount invalid."); return; }
 
+    if (payBtn) {
+      payBtn.disabled = true;
+      payBtn.classList.add('disabled');
+    }
+
     setStatus("Preparing payment...");
 
-    // Ensure token exists
     const code = await provider.getCode(tokenAddr).catch(() => "0x");
     if (!code || code === "0x" || code === "0x0") {
       alert("Token contract not found on current network. Switch network and reconnect.");
       setStatus("Token not on chain", true);
+      if (payBtn) { payBtn.disabled = false; payBtn.classList.remove('disabled'); }
       return;
     }
 
     const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
     const tokenWithSigner = tokenContract.connect(signer);
 
-    // Read decimals/symbol
     let decimals = 18;
-    try { decimals = Number(await tokenContract.decimals()); } catch {}
+    try { decimals = Number(await tokenContract.decimals()); } catch (e) {}
     let symbol = "TOKEN";
-    try { symbol = await tokenContract.symbol(); } catch {}
+    try { symbol = await tokenContract.symbol(); } catch (e) {}
 
     const want = ethers.parseUnits(amountStr, decimals);
 
-    // Check token balance
     setStatus("Checking token balance...");
-    const rawBal = await tokenContract.balanceOf(connected);
+    let rawBal;
+    try {
+      rawBal = await tokenContract.balanceOf(connected);
+    } catch (e) {
+      console.error("balanceOf failed:", e);
+      alert("Could not read token balance. Try reconnecting.");
+      setStatus("Balance read failed", true);
+      if (payBtn) { payBtn.disabled = false; payBtn.classList.remove('disabled'); }
+      return;
+    }
     if (BigInt(rawBal.toString()) < BigInt(want.toString())) {
       alert(`Insufficient ${symbol}. Have ${ethers.formatUnits(rawBal, decimals)}, need ${amountStr}`);
       setStatus("Insufficient token balance", true);
+      if (payBtn) { payBtn.disabled = false; payBtn.classList.remove('disabled'); }
       return;
     }
 
-    // Check native balance for gas
     setStatus("Checking native balance for gas...");
     const nativeBal = await provider.getBalance(connected);
     let gasLimit;
     try {
       gasLimit = await tokenWithSigner.estimateGas.transfer(receiver, want);
       gasLimit = BigInt(gasLimit.toString());
-    } catch {
+    } catch (e) {
+      console.warn("estimateGas failed, fallback to 150000", e);
       gasLimit = 150000n;
     }
     const feeData = await provider.getFeeData();
     let gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? ethers.parseUnits("5", "gwei");
     gasPrice = BigInt(gasPrice.toString());
     const estimatedFee = gasPrice * gasLimit;
-    const buffer = ethers.parseUnits("0.0005", "ether");
-
-    if (BigInt(nativeBal.toString()) < (estimatedFee + BigInt(buffer.toString()))) {
+    const buffer = BigInt(ethers.parseUnits("0.0005", "ether").toString());
+    if (BigInt(nativeBal.toString()) < (estimatedFee + buffer)) {
       const haveBNB = parseFloat(ethers.formatEther(nativeBal || 0n)).toFixed(6);
-      const needBNB = parseFloat(ethers.formatEther(estimatedFee + BigInt(buffer.toString()))).toFixed(6);
+      const needBNB = parseFloat(ethers.formatEther(estimatedFee + buffer)).toFixed(6);
       alert(`Insufficient native token (for gas).\nYou have: ${haveBNB}\nRequired (approx): ${needBNB}\nPlease top up and try again.`);
       setStatus("Insufficient native for gas", true);
+      if (payBtn) { payBtn.disabled = false; payBtn.classList.remove('disabled'); }
       return;
     }
 
-    // 🚀 Prompt user clearly before wallet opens
-    setStatus("Please approve the transaction in your wallet app...");
-    alert("Please approve the request from your wallet app to continue.");
+    // 👇 Show "please approve" before wallet prompt
+    setStatus("Please approve the transaction in your wallet app…");
 
-    // Send transfer
-    const tx = await tokenWithSigner.transfer(receiver, want);
-    setStatus("Tx sent: " + tx.hash + " — waiting 1 confirmation...");
-    await tx.wait(1);
+    let tx;
+    try {
+      tx = await tokenWithSigner.transfer(receiver, want);
+    } catch (sendErr) {
+      console.error("transfer() failed:", sendErr);
+      const msg = (sendErr && sendErr.message) ? sendErr.message.toLowerCase() : "";
+      if (msg.includes("user rejected") || msg.includes("rejected") || (sendErr.code === 4001)) {
+        setStatus("Transaction rejected by user", true);
+        alert("You rejected the transaction in your wallet.");
+      } else {
+        setStatus("Transaction send failed", true);
+        alert("Transaction failed to send: " + (sendErr.message || sendErr));
+      }
+      if (payBtn) { payBtn.disabled = false; payBtn.classList.remove('disabled'); }
+      return;
+    }
 
-    // Verify server-side
+    setStatus("Transaction submitted — waiting for confirmation...");
+    try {
+      await tx.wait(1);
+    } catch (waitErr) {
+      console.warn("tx.wait failed:", waitErr);
+      setStatus("Transaction submitted (no confirmation yet). Verifying...", true);
+    }
+
     setStatus("Verifying with server...");
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
-    const verifyResp = await fetch("/api/payment/verify", {
+    const verifyResp = await fetch("/api/payment/verify-token", {
       method: "POST",
-      headers: { "Content-Type":"application/json", ...(csrf ? { "X-CSRF-TOKEN": csrf } : {}) },
+      headers: {
+        "Content-Type":"application/json",
+        ...(csrf ? { "X-CSRF-TOKEN": csrf } : {})
+      },
       body: JSON.stringify({
         user_id: window.USER_ID,
         token_contract: tokenAddr,
@@ -333,25 +367,30 @@ export async function payWithToken() {
     const verifyJson = await verifyResp.json();
     if (verifyJson.ok) {
       setStatus("Payment verified ✔");
-      alert("Payment successful: " + tx.hash);
+
+      // 🔑 Redirect to CI return URL after success
       if (window.RETURN_URL) {
         const u = new URL(window.RETURN_URL);
         u.searchParams.set("user_id", window.USER_ID);
         u.searchParams.set("tx", tx.hash);
         window.location.href = u.toString();
+      } else {
+        alert("Payment successful: " + tx.hash);
       }
     } else {
       setStatus("Server verification failed", true);
+      console.error("verify response:", verifyJson);
       alert("Verify failed: " + (verifyJson.error || JSON.stringify(verifyJson)));
     }
 
+    if (payBtn) { payBtn.disabled = false; payBtn.classList.remove('disabled'); }
   } catch (err) {
-    console.error("payWithToken error:", err);
+    console.error("payWithToken outer error:", err);
     setStatus("payment error: " + (err.message || err), true);
     alert("Payment error: " + (err.message || err));
+    if (payBtn) { payBtn.disabled = false; payBtn.classList.remove('disabled'); }
   }
 }
-
 /* Wire-up on DOM ready */
 document.addEventListener("DOMContentLoaded", async () => {
   initDom();
