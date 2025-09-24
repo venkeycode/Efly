@@ -18,57 +18,7 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
 
-Route::post('login', 'AccountController@login');
-Route::post('verifyMobile', 'AccountController@verifyMobile');
-Route::post('resendOtp', 'AccountController@resendOtp');
-Route::post('ccavenue/payment/response', 'CCAvenueController@response')->name('api.ccavenue.payment.response');
+Route::post('payment/verify', 'WalletController@verifyTokenPayment');
 
-//Product
-Route::get('categories', 'ProductController@categories');
-Route::get('featured_categories', 'ProductController@featured_categories');
-Route::any('products', 'ProductController@products');
-Route::any('product', 'ProductController@product');
-
-Route::group(['middelware' => 'auth:sanctum'], function () {
-    Route::group(['middleware' => 'verification'], function () {
-        Route::get('logout', 'AccountController@logout');
-        Route::get('getProfile', 'ProfileController@getProfile');
-        Route::post('updateProfile', 'ProfileController@updateProfile');
-        Route::post('updateProfilePic', 'ProfileController@updateProfilePic');
-        Route::post('deliveryLocation', 'ProfileController@deliveryLocation');
-        Route::get('my_locations', 'ProfileController@my_locations');
-        Route::post('deleteLocation', 'ProfileController@deleteLocation');
-        Route::any('firebase_token', 'ProfileController@firebase_token');
-
-        //Wishlist
-        Route::post('addWishList', 'WishListController@wish_list');
-        Route::get('myWishList', 'WishListController@my_wishlist');
-        //Cart
-        Route::post('addToCart', 'CartController@add_to_cart');
-        Route::post('myCart', 'CartController@myCart');
-        Route::post('removeFromCart', 'CartController@removeCart');
-        Route::post('update_cart', 'CartController@update_cart');
-        Route::any('cartTotal', 'CartController@cartTotal');
-        Route::get('clearCart', 'CartController@clearCart');
-        //Orders
-        Route::post('placeOrder', 'OrderController@order_placed');
-        Route::get('myOrders', 'OrderController@myOrders');
-        //Payments
-        Route::post('payAmount', "PaymentController@payAmount");
-        //Coupons
-        Route::get('allCoupons', 'CouponController@allCoupons');
-        Route::post('apply', 'CouponController@apply');
-
-        Route::get('notifications', 'SettingController@getNotification');
-
-    });
-});
-//setting
-Route::get('banners', 'SettingController@banners');
-Route::get('pages', 'SettingController@pages');
-Route::get('settings', 'SettingController@settings');
-Route::get('sitesettings', 'SettingController@sitesettings');
-Route::get('states', 'SettingController@states');
-Route::get('cities', 'SettingController@cities');
 
 

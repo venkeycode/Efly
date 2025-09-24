@@ -229,6 +229,7 @@ export async function fetchBalanceFromServer(addressArg = null) {
 }
 
 /* payWithToken: robust client-side flow (checks server, checks gas, sends ERC20 transfer) */
+/* Pay with token (USDT) flow */
 export async function payWithToken() {
   try {
     if (!provider || !signer) {
@@ -252,97 +253,74 @@ export async function payWithToken() {
 
     setStatus("Preparing payment...");
 
-    // Ensure token is present on current network
-    const code = await provider.getCode(tokenAddr).catch(e => { console.warn("getCode failed:", e); return "0x"; });
+    // Ensure token exists
+    const code = await provider.getCode(tokenAddr).catch(() => "0x");
     if (!code || code === "0x" || code === "0x0") {
       alert("Token contract not found on current network. Switch network and reconnect.");
       setStatus("Token not on chain", true);
       return;
     }
 
-    // Contract instances
     const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
     const tokenWithSigner = tokenContract.connect(signer);
 
-    // Read decimals & symbol (safe)
+    // Read decimals/symbol
     let decimals = 18;
-    try { decimals = Number(await tokenContract.decimals()); } catch (e) { console.warn("decimals read failed, fallback 18", e); }
+    try { decimals = Number(await tokenContract.decimals()); } catch {}
     let symbol = "TOKEN";
-    try { symbol = await tokenContract.symbol(); } catch (e){}
+    try { symbol = await tokenContract.symbol(); } catch {}
 
-    // Convert amount -> smallest unit
     const want = ethers.parseUnits(amountStr, decimals);
 
-    // 1) Check token balance via contract
+    // Check token balance
     setStatus("Checking token balance...");
-    let rawBal;
-    try {
-      rawBal = await tokenContract.balanceOf(connected);
-    } catch (e) {
-      console.error("balanceOf failed:", e);
-      alert("Could not read token balance. Try reconnecting.");
-      setStatus("Balance read failed", true);
-      return;
-    }
+    const rawBal = await tokenContract.balanceOf(connected);
     if (BigInt(rawBal.toString()) < BigInt(want.toString())) {
       alert(`Insufficient ${symbol}. Have ${ethers.formatUnits(rawBal, decimals)}, need ${amountStr}`);
       setStatus("Insufficient token balance", true);
       return;
     }
 
-    // 2) Check server-side balance as trusted gate (optional but recommended)
-    setStatus("Verifying server-side balance...");
-    const server = await fetchBalanceFromServer(connected);
-    if (!server) { alert("Could not get server balance."); return; }
-    const srvRaw = server.token?.balance_wei ?? "0";
-    if (BigInt(srvRaw) < BigInt(want.toString())) {
-      alert(`Server shows insufficient token balance (${server.token?.balance ?? '0'}).`);
-      setStatus("Server indicates insufficient token", true);
-      return;
-    }
-
-    // 3) Ensure native token (BNB) available for gas
+    // Check native balance for gas
     setStatus("Checking native balance for gas...");
-    const nativeBal = await provider.getBalance(connected).catch(()=> 0n);
-    // estimate gas for transfer - fallback to 150k
+    const nativeBal = await provider.getBalance(connected);
     let gasLimit;
     try {
       gasLimit = await tokenWithSigner.estimateGas.transfer(receiver, want);
       gasLimit = BigInt(gasLimit.toString());
-    } catch (e) {
-      console.warn("estimateGas failed, using fallback 150000", e);
+    } catch {
       gasLimit = 150000n;
     }
     const feeData = await provider.getFeeData();
     let gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? ethers.parseUnits("5", "gwei");
     gasPrice = BigInt(gasPrice.toString());
     const estimatedFee = gasPrice * gasLimit;
-    const buffer = BigInt(ethers.parseUnits("0.0005", "ether").toString());
+    const buffer = ethers.parseUnits("0.0005", "ether");
 
-    if (BigInt(nativeBal.toString()) < (estimatedFee + buffer)) {
+    if (BigInt(nativeBal.toString()) < (estimatedFee + BigInt(buffer.toString()))) {
       const haveBNB = parseFloat(ethers.formatEther(nativeBal || 0n)).toFixed(6);
-      const needBNB = parseFloat(ethers.formatEther(estimatedFee + buffer)).toFixed(6);
+      const needBNB = parseFloat(ethers.formatEther(estimatedFee + BigInt(buffer.toString()))).toFixed(6);
       alert(`Insufficient native token (for gas).\nYou have: ${haveBNB}\nRequired (approx): ${needBNB}\nPlease top up and try again.`);
       setStatus("Insufficient native for gas", true);
       return;
     }
 
-    // 4) Send transfer
-    setStatus("Sending token transfer — confirm in wallet...");
+    // 🚀 Prompt user clearly before wallet opens
+    setStatus("Please approve the transaction in your wallet app...");
+    alert("Please approve the request from your wallet app to continue.");
+
+    // Send transfer
     const tx = await tokenWithSigner.transfer(receiver, want);
     setStatus("Tx sent: " + tx.hash + " — waiting 1 confirmation...");
     await tx.wait(1);
 
-    // 5) Verify server-side
+    // Verify server-side
     setStatus("Verifying with server...");
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
-    const verifyResp = await fetch("/api/payment/verify-token", {
+    const verifyResp = await fetch("/api/payment/verify", {
       method: "POST",
-      headers: {
-        "Content-Type":"application/json",
-        ...(csrf ? { "X-CSRF-TOKEN": csrf } : {})
-      },
+      headers: { "Content-Type":"application/json", ...(csrf ? { "X-CSRF-TOKEN": csrf } : {}) },
       body: JSON.stringify({
         user_id: window.USER_ID,
         token_contract: tokenAddr,
@@ -364,7 +342,6 @@ export async function payWithToken() {
       }
     } else {
       setStatus("Server verification failed", true);
-      console.error("verify response:", verifyJson);
       alert("Verify failed: " + (verifyJson.error || JSON.stringify(verifyJson)));
     }
 

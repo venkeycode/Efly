@@ -19,7 +19,7 @@ class RouteServiceProvider extends ServiceProvider
      */
     public const HOME = '/home';
     protected $namespace = 'App\Http\Controllers\Website';
-    protected $app_namespace = 'App\Http\Controllers\MobileApp';
+    protected $app_namespace = 'App\Http\Controllers\Api';
     protected $admin_namespace = 'App\Http\Controllers\Admin';
     // protected $company_namespace = 'App\Http\Controllers\Company';
     // protected $companyv2_namespace = 'App\Http\Controllers\Company_Old';
@@ -57,8 +57,8 @@ class RouteServiceProvider extends ServiceProvider
                 ->group(base_path('routes/api.php'));
 
                 Route::middleware('api')->namespace($this->app_namespace)
-                ->prefix('api/customer')
-                ->group(base_path('routes/api/customer.php'));
+                ->prefix('api')
+                ->group(base_path('routes/api.php'));
 
                 // Route::middleware('api')->namespace($this->companyApp_namespace)
                 // ->prefix('api/company')
