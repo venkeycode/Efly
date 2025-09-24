@@ -226,7 +226,7 @@ public function showPayPage(Request $r)
     $userId = $r->query('user_id');
     $amount = $r->query('amount');
     $plan_id = $r->query('plan_id');
-    $return = 'https://earnnfly.com/New/user/index.php/home';//$r->query('return');
+    $return = 'https://earnnfly.com/New/user/index.php/nowpayments/response';//$r->query('return');
 
     $savedWallet = DB::table('customdetails')
         ->where('uid', $userId)
