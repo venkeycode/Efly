@@ -349,7 +349,7 @@ export async function payWithToken() {
     setStatus("Verifying with server...");
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
-    const verifyResp = await fetch("/api/payment/verify-token", {
+    const verifyResp = await fetch("/api/payment/verify", {
       method: "POST",
       headers: {
         "Content-Type":"application/json",
