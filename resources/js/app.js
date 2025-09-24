@@ -1,13 +1,12 @@
 // resources/js/app.js
-// Replace existing file with this content
 import { ethers } from "ethers";
 import EthereumProvider from "@walletconnect/ethereum-provider";
 
 /*
-  CONFIG - change env via Vite if needed
+  CONFIG - change via Vite env if needed
 */
 const PROJECT_ID = import.meta.env.VITE_WC_PROJECT_ID || "611536788e4297012ef34993004d5565";
-const DEFAULT_CHAIN = 56; // BSC
+const DEFAULT_CHAIN = 56; // BSC (change if you want)
 const RPC_MAP = {
   56: "https://bsc-dataseed.binance.org/",
   137: "https://polygon-rpc.com",
@@ -23,21 +22,15 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 value) returns (bool)"
 ];
 
-/* State */
+/* STATE */
 let wcProvider = null;       // raw WalletConnect provider
 let provider = null;         // ethers BrowserProvider
 let signer = null;           // ethers Signer
 let connectedAddress = null; // string
 
-/* DOM elems - initialized on DOMContentLoaded */
+/* DOM elements (initialized on DOMContentLoaded) */
 let walletAddrEl, walletBalanceEl, statusEl, payBtn, reconnectBtn;
 
-/* Helpers */
-function setStatus(txt, isError = false) {
-  if (!statusEl) return;
-  statusEl.innerText = `Status: ${txt}`;
-  statusEl.style.color = isError ? "crimson" : "";
-}
 function initDom() {
   walletAddrEl = document.getElementById("walletAddr");
   walletBalanceEl = document.getElementById("walletBalance");
@@ -45,9 +38,14 @@ function initDom() {
   payBtn = document.getElementById("payBtn");
   reconnectBtn = document.getElementById("reconnectBtn");
 }
+function setStatus(txt, isError = false) {
+  if (!statusEl) return;
+  statusEl.innerText = `Status: ${txt}`;
+  statusEl.style.color = isError ? "crimson" : "";
+}
 function lower(a=''){ return (a||'').toLowerCase(); }
 
-/* Init WalletConnect provider restricted to BSC to avoid sessions pinned to wrong chain */
+/* Init WalletConnect provider restricted to one chain (BSC) to avoid cross-chain session issues */
 async function initWcProvider({ showQrModal = false } = {}) {
   return await EthereumProvider.init({
     projectId: PROJECT_ID,
@@ -58,7 +56,7 @@ async function initWcProvider({ showQrModal = false } = {}) {
   });
 }
 
-/* Try to request wallet_switchEthereumChain in several ways */
+/* Try to request wallet_switchEthereumChain in several ways (best-effort) */
 async function trySwitchToChain(ethProviderObj, targetChainId = DEFAULT_CHAIN) {
   const hex = "0x" + Number(targetChainId).toString(16);
   async function tryReq(obj) {
@@ -69,7 +67,6 @@ async function trySwitchToChain(ethProviderObj, targetChainId = DEFAULT_CHAIN) {
         return true;
       }
       if (typeof obj.send === "function") {
-        // legacy providers
         await obj.send("wallet_switchEthereumChain", [{ chainId: hex }]);
         return true;
       }
@@ -93,7 +90,7 @@ async function trySwitchToChain(ethProviderObj, targetChainId = DEFAULT_CHAIN) {
   return false;
 }
 
-/* Ensure we are on BSC: try to switch programmatically; if fails, instruct user */
+/* Try ensure BSC — otherwise instruct user to switch manually */
 async function ensureBscFlow() {
   const ok = await trySwitchToChain(wcProvider || (provider && provider.provider) || provider, DEFAULT_CHAIN);
   if (!ok) {
@@ -101,13 +98,13 @@ async function ensureBscFlow() {
     if (reconnectBtn) reconnectBtn.style.display = "inline-block";
     return false;
   }
-  // wait a moment for provider to update
+  // small delay to let provider update
   await new Promise(r => setTimeout(r, 700));
   setStatus("Switched to BSC");
   return true;
 }
 
-/* Restore session silently (no QR) */
+/* Restore session silently (no QR) if available */
 export async function restoreSession() {
   setStatus("restoring session...");
   try {
@@ -118,7 +115,7 @@ export async function restoreSession() {
     signer = await provider.getSigner();
     connectedAddress = await signer.getAddress();
 
-    // expose for debugging
+    // expose for debugging in console
     window.__wcProvider = wcProvider;
     window.__provider = provider;
     window.__signer = signer;
@@ -130,7 +127,6 @@ export async function restoreSession() {
 
     await ensureBscFlow();
     await fetchBalanceFromServer(connectedAddress);
-    try { provider.on("block", () => fetchBalanceFromServer(connectedAddress)); } catch(e){}
     return connectedAddress;
   } catch (err) {
     console.warn("restoreSession failed:", err);
@@ -141,7 +137,7 @@ export async function restoreSession() {
   }
 }
 
-/* Open QR modal and connect fresh */
+/* Open connect QR and connect fresh */
 export async function openConnectQr() {
   setStatus("opening WalletConnect QR...");
   try {
@@ -152,7 +148,6 @@ export async function openConnectQr() {
     signer = await provider.getSigner();
     connectedAddress = await signer.getAddress();
 
-    // expose for debugging
     window.__wcProvider = wcProvider;
     window.__provider = provider;
     window.__signer = signer;
@@ -162,10 +157,10 @@ export async function openConnectQr() {
     if (payBtn) payBtn.disabled = false;
     if (reconnectBtn) reconnectBtn.style.display = "none";
 
-    // ensure on BSC
+    // ensure on BSC (best-effort)
     await ensureBscFlow();
 
-    // save wallet to backend if USER_ID present
+    // auto-save wallet to backend (if configured)
     try {
       if (window.USER_ID) {
         const csrfMeta = document.querySelector('meta[name="csrf-token"]');
@@ -182,7 +177,6 @@ export async function openConnectQr() {
     } catch (e) { console.warn("save wallet failed:", e); }
 
     await fetchBalanceFromServer(connectedAddress);
-    try { provider.on("block", () => fetchBalanceFromServer(connectedAddress)); } catch(e){}
     return connectedAddress;
   } catch (err) {
     console.error("openConnectQr failed:", err);
@@ -191,7 +185,7 @@ export async function openConnectQr() {
   }
 }
 
-/* Fetch balances from Laravel server (server chooses RPC per token) */
+/* Fetch balance via Laravel server endpoint (most reliable across chains) */
 export async function fetchBalanceFromServer(addressArg = null) {
   try {
     const addr = addressArg || connectedAddress || (walletAddrEl ? walletAddrEl.innerText.trim() : null);
@@ -216,6 +210,7 @@ export async function fetchBalanceFromServer(addressArg = null) {
       setStatus("balance API error", true);
       return null;
     }
+
     const native = body.native?.balance ?? "0";
     const nativeSym = body.native?.symbol ?? "NATIVE";
     let tokenText = "0.00 USDT";
@@ -233,67 +228,9 @@ export async function fetchBalanceFromServer(addressArg = null) {
   }
 }
 
-/* Ensure native token (BNB) available for gas before sending transfer */
-async function ensureNativeForGas(tokenContractAddress, receiver, amountUnits /* BigInt or ethers.BigInt */) {
-  if (!provider || !signer || !connectedAddress) throw new Error("Wallet not connected");
-  try {
-    const token = new ethers.Contract(tokenContractAddress, ERC20_ABI, provider);
-
-    // estimate gas (fallback to 150k)
-    let gasLimit;
-    try {
-      gasLimit = await token.connect(signer).estimateGas.transfer(receiver, amountUnits);
-      gasLimit = BigInt(gasLimit.toString());
-    } catch (e) {
-      console.warn("estimateGas failed, fallback to 150000", e);
-      gasLimit = 150000n;
-    }
-
-    // feeData
-    const feeData = await provider.getFeeData();
-    let gasPriceWei;
-    if (feeData.maxFeePerGas) {
-      gasPriceWei = BigInt(feeData.maxFeePerGas.toString());
-    } else if (feeData.gasPrice) {
-      gasPriceWei = BigInt(feeData.gasPrice.toString());
-    } else {
-      gasPriceWei = BigInt(ethers.parseUnits("5", "gwei").toString());
-    }
-
-    const estimatedFeeWei = gasLimit * gasPriceWei;
-    const bufferWei = BigInt(ethers.parseUnits("0.0005", "ether").toString());
-    const totalNeededWei = estimatedFeeWei + bufferWei;
-
-    const balWei = await provider.getBalance(connectedAddress);
-    const balBig = BigInt(balWei.toString());
-    const shortWei = totalNeededWei > balBig ? (totalNeededWei - balBig) : 0n;
-
-    return {
-      ok: balBig >= totalNeededWei,
-      requiredWei: totalNeededWei,
-      requiredBNB: ethers.formatEther(totalNeededWei),
-      balanceWei: balBig,
-      balanceBNB: ethers.formatEther(balBig),
-      shortWei,
-      shortBNB: shortWei === 0n ? "0" : ethers.formatEther(shortWei),
-      gasLimit: gasLimit.toString(),
-      estimatedFeeWei: estimatedFeeWei.toString(),
-      gasPriceWei: gasPriceWei.toString()
-    };
-  } catch (err) {
-    console.error("ensureNativeForGas error:", err);
-    throw err;
-  }
-}
-
-/* Pay with token (USDT) flow */
-/*
-  Payment flow: uses server balance as gate, then uses signer to send token.transfer()
-*/
-// Replace your existing payWithToken() with this robust version
+/* payWithToken: robust client-side flow (checks server, checks gas, sends ERC20 transfer) */
 export async function payWithToken() {
   try {
-    // Basic pre-checks
     if (!provider || !signer) {
       alert("Please connect your wallet first.");
       return;
@@ -302,7 +239,6 @@ export async function payWithToken() {
     const connected = (await signer.getAddress()).toLowerCase();
     const saved = (window.SAVED_WALLET || "").toLowerCase();
     if (saved && saved !== "" && connected !== saved) {
-      // allow user to continue if they knowingly connected a different wallet
       if (!confirm("Connected wallet differs from saved wallet. Continue with connected wallet?")) return;
     }
 
@@ -316,42 +252,32 @@ export async function payWithToken() {
 
     setStatus("Preparing payment...");
 
-    // Ensure token exists on chain (getCode)
-    const code = await provider.getCode(tokenAddr).catch(e => {
-      console.warn("getCode failed:", e);
-      return "0x";
-    });
+    // Ensure token is present on current network
+    const code = await provider.getCode(tokenAddr).catch(e => { console.warn("getCode failed:", e); return "0x"; });
     if (!code || code === "0x" || code === "0x0") {
       alert("Token contract not found on current network. Switch network and reconnect.");
       setStatus("Token not on chain", true);
       return;
     }
 
-    // Create contract instances:
-    // - tokenContract (provider) for read-only calls if needed
-    // - tokenWithSigner (signer) for write calls (transfer)
+    // Contract instances
     const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
     const tokenWithSigner = tokenContract.connect(signer);
 
-    // Read decimals and symbol (safe)
+    // Read decimals & symbol (safe)
     let decimals = 18;
-    try { decimals = Number(await tokenContract.decimals()); }
-    catch (e) {
-      console.warn("decimals() read failed, falling back to common values", e);
-      // If USDT common networks: fallback to 6 for eth/polygon; 18 sometimes on BSC forks — you can override
-      // We'll leave as 18 fallback; adjust if you know chain-specific decimals.
-    }
+    try { decimals = Number(await tokenContract.decimals()); } catch (e) { console.warn("decimals read failed, fallback 18", e); }
     let symbol = "TOKEN";
-    try { symbol = await tokenContract.symbol(); } catch(e){}
+    try { symbol = await tokenContract.symbol(); } catch (e){}
 
-    // Convert amount -> token smallest unit (BigInt)
-    const want = ethers.parseUnits(amountStr, decimals); // BigInt
+    // Convert amount -> smallest unit
+    const want = ethers.parseUnits(amountStr, decimals);
 
-    // Check token balance
+    // 1) Check token balance via contract
     setStatus("Checking token balance...");
     let rawBal;
     try {
-      rawBal = await tokenContract.balanceOf(connected); // BigInt
+      rawBal = await tokenContract.balanceOf(connected);
     } catch (e) {
       console.error("balanceOf failed:", e);
       alert("Could not read token balance. Try reconnecting.");
@@ -364,46 +290,50 @@ export async function payWithToken() {
       return;
     }
 
-    // Check native (gas) balance
+    // 2) Check server-side balance as trusted gate (optional but recommended)
+    setStatus("Verifying server-side balance...");
+    const server = await fetchBalanceFromServer(connected);
+    if (!server) { alert("Could not get server balance."); return; }
+    const srvRaw = server.token?.balance_wei ?? "0";
+    if (BigInt(srvRaw) < BigInt(want.toString())) {
+      alert(`Server shows insufficient token balance (${server.token?.balance ?? '0'}).`);
+      setStatus("Server indicates insufficient token", true);
+      return;
+    }
+
+    // 3) Ensure native token (BNB) available for gas
     setStatus("Checking native balance for gas...");
-    let nativeBal;
-    try { nativeBal = await provider.getBalance(connected); } catch (e) { nativeBal = 0n; console.warn("native balance read failed", e); }
-    // estimate gas for token.transfer
+    const nativeBal = await provider.getBalance(connected).catch(()=> 0n);
+    // estimate gas for transfer - fallback to 150k
     let gasLimit;
     try {
       gasLimit = await tokenWithSigner.estimateGas.transfer(receiver, want);
-      // ensure BigInt
       gasLimit = BigInt(gasLimit.toString());
     } catch (e) {
-      console.warn("estimateGas failed, fallback to safe gas limit:", e);
-      gasLimit = 150000n; // safe fallback for ERC20
+      console.warn("estimateGas failed, using fallback 150000", e);
+      gasLimit = 150000n;
     }
-
-    // get gas price or EIP-1559 fields
     const feeData = await provider.getFeeData();
     let gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? ethers.parseUnits("5", "gwei");
     gasPrice = BigInt(gasPrice.toString());
+    const estimatedFee = gasPrice * gasLimit;
+    const buffer = BigInt(ethers.parseUnits("0.0005", "ether").toString());
 
-    const estimatedFee = gasPrice * gasLimit; // BigInt
-
-    // small buffer to be safe
-    const buffer = ethers.parseUnits("0.0005", "ether"); // BigInt
-
-    if (BigInt(nativeBal.toString()) < (estimatedFee + BigInt(buffer.toString()))) {
+    if (BigInt(nativeBal.toString()) < (estimatedFee + buffer)) {
       const haveBNB = parseFloat(ethers.formatEther(nativeBal || 0n)).toFixed(6);
-      const needBNB = parseFloat(ethers.formatEther(estimatedFee + BigInt(buffer.toString()))).toFixed(6);
+      const needBNB = parseFloat(ethers.formatEther(estimatedFee + buffer)).toFixed(6);
       alert(`Insufficient native token (for gas).\nYou have: ${haveBNB}\nRequired (approx): ${needBNB}\nPlease top up and try again.`);
       setStatus("Insufficient native for gas", true);
       return;
     }
 
-    // All checks passed -> send transfer
+    // 4) Send transfer
     setStatus("Sending token transfer — confirm in wallet...");
     const tx = await tokenWithSigner.transfer(receiver, want);
     setStatus("Tx sent: " + tx.hash + " — waiting 1 confirmation...");
     await tx.wait(1);
 
-    // Verify server-side: POST to your verify endpoint
+    // 5) Verify server-side
     setStatus("Verifying with server...");
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     const csrf = csrfMeta ? csrfMeta.getAttribute("content") : null;
@@ -426,7 +356,6 @@ export async function payWithToken() {
     if (verifyJson.ok) {
       setStatus("Payment verified ✔");
       alert("Payment successful: " + tx.hash);
-      // optional: redirect back to CI app if RETURN_URL provided
       if (window.RETURN_URL) {
         const u = new URL(window.RETURN_URL);
         u.searchParams.set("user_id", window.USER_ID);
@@ -445,25 +374,26 @@ export async function payWithToken() {
     alert("Payment error: " + (err.message || err));
   }
 }
-/* Wire up on DOM ready */
+
+/* Wire-up on DOM ready */
 document.addEventListener("DOMContentLoaded", async () => {
   initDom();
 
-  // expose functions
+  // expose functions for Blade to call
   window.connectWalletConnect = openConnectQr;
   window.openConnectQr = openConnectQr;
   window.restoreSession = restoreSession;
   window.refreshBalance = () => fetchBalanceFromServer();
   window.payWithToken = payWithToken;
 
-  // try to silently restore if a saved wallet exists (doesn't guarantee provider session)
+  // try silent restore if the page already has a saved wallet
   if (window.SAVED_WALLET) {
     try { await restoreSession(); } catch (e) { console.warn("silent restore failed", e); }
   } else {
     setStatus("no saved wallet");
   }
 
-  // reconnect button fallback
+  // reconnect button behavior
   if (reconnectBtn) {
     reconnectBtn.onclick = () => {
       if (window.openConnectQr) window.openConnectQr();
@@ -471,6 +401,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
   }
 
-  // poll server-side balance so UI updates if something changed
+  // poll server-side balance every 15s
   setInterval(() => { fetchBalanceFromServer(); }, 15000);
 });
