@@ -225,7 +225,7 @@ public function showPayPage(Request $r)
 {
     $userId = $r->query('user_id');
     $amount = $r->query('amount');
-    $return = $r->query('return');
+    $return = 'https://earnnfly.com/New/user/index.php/home';//$r->query('return');
 
     $savedWallet = DB::table('customdetails')
         ->where('uid', $userId)
