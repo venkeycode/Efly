@@ -33,7 +33,7 @@
     @php
       // token contract you want to use for withdrawal (default BSC USDT)
       $usdtBsc = env('USDT_CONTRACT_BSC', '0x55d398326f99059fF775485246999027B3197955');
-      $receiver = $withdraw->wallet_address;
+      $receiver = $withdraw['wallet_address'];
     @endphp
 
     <div class="row">
