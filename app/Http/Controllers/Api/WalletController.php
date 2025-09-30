@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use App\Models\Customer;
 use Illuminate\Support\Facades\Http;
 use App\Models\CryptoPayment;
+use App\Models\CryptoPayout;
 class WalletController extends Controller
 {
 
@@ -209,4 +210,104 @@ public function verifyTokenPayment(Request $r)
         $res = $resp->json('result');
         return $res ? hexdec($res) : 18;
     }
+
+public function approveSingle(Request $request, $id)
+{
+    $validator = Validator::make($request->all(), [
+        'user_id'        => 'required|integer',
+        'wallet_address' => 'required|string',
+        'amount'         => 'required|numeric',
+        'token_contract' => 'required|string',
+        'tx_hash'        => 'nullable|string',
+        'chain'          => 'nullable|string' // optional: 'bsc'|'polygon'|'eth'
+    ]);
+
+    if ($validator->fails()) {
+        return back()->withErrors($validator)->withInput();
+    }
+
+    DB::beginTransaction();
+    try {
+        $userId = $request->user_id;
+        $toAddress = strtolower($request->wallet_address);
+        $token = strtolower($request->token_contract);
+        $amountDecimal = (string)$request->amount;
+        $chain = $request->chain ?? 'bsc'; // default to BSC; adjust as needed
+
+        // pick RPC by chain
+        $rpc = match (strtolower($chain)) {
+            'polygon' => env('RPC_POLYGON', env('RPC_URL', 'https://polygon-rpc.com')),
+            'eth', 'ethereum' => env('RPC_ETH', env('RPC_URL', 'https://mainnet.infura.io/v3/YOUR_KEY')),
+            default => env('RPC_BSC', env('RPC_URL', 'https://bsc-dataseed.binance.org/')),
+        };
+
+        // determine token decimals (try cache in future)
+        $decimals = $this->getTokenDecimals($token, $rpc);
+
+        // convert decimal amount -> smallest unit string (wei-like)
+        $amountWeiStr = $this->decimalToWeiString($amountDecimal, $decimals);
+
+        // create payout record (status pending by default)
+        $payout = CryptoPayout::create([
+            'user_id'     => $userId,
+            'token'       => $token,
+            'chain'       => strtolower($chain),
+            'from'        => strtolower(env('ADMIN_ADDRESS') ?: ''),
+            'to'          => $toAddress,
+            'amount'      => $amountDecimal,
+            'amount_wei'  => $amountWeiStr,
+            'tx_hash'     => $request->tx_hash ?: null,
+            'status'      => $request->tx_hash ? 'pending' : 'pending', // will update below if tx_hash is verified
+            'reference'   => $request->input('reference', null),
+        ]);
+
+        // If we have a tx_hash, try to verify immediately and mark confirmed/failed.
+        if ($request->tx_hash) {
+            $verify = $this->verifyOnChainTransfer(
+                $rpc,
+                $request->tx_hash,
+                $payout->from,
+                $payout->to,
+                $payout->amount_wei,
+                $token
+            );
+
+            if ($verify['ok'] === true && $verify['status'] === 'confirmed') {
+                $payout->status = 'confirmed';
+                $payout->tx_hash = $request->tx_hash;
+            } elseif ($verify['ok'] === true && $verify['status'] === 'pending') {
+                // receipt found but not yet confirmed; keep pending
+                $payout->status = 'pending';
+                $payout->tx_hash = $request->tx_hash;
+            } else {
+                // verification failed or amount mismatch
+                $payout->status = 'failed';
+                $payout->tx_hash = $request->tx_hash;
+                // store verification message in metadata if your model supports it (or use another column)
+            }
+            $payout->save();
+        }
+
+        // Update CI RequestAmount row (mark processed)
+        $req = RequestAmount::find($id);
+        if ($req) {
+            $req->status = 1; // adapt to your statuses
+            $req->paid_date = now();
+            // store the receiving address and paid amount fields if those exist
+            if (property_exists($req, 'usdt_address')) $req->usdt_address = $toAddress;
+            if (property_exists($req, 'paid_amount')) $req->paid_amount = $amountDecimal;
+            $req->save();
+        }
+
+        DB::commit();
+
+        return redirect()->route('admin.withdraw.single', ['id' => $id])
+                         ->with('success', 'Withdraw recorded (payout id: ' . $payout->id . ').');
+
+    } catch (\Throwable $e) {
+        DB::rollBack();
+        return back()->with('error', 'Failed to record withdraw: ' . $e->getMessage());
+    }
+}
+
 }

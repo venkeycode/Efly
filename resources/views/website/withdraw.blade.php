@@ -71,7 +71,7 @@
     window.WITHDRAW_TOKEN    = {!! json_encode($usdtBsc) !!}; // token contract on the chain admin will use
     // Endpoint where server verifies & stores the completed withdraw record
     // Make sure this route exists and accepts POST JSON: /admin/withdraw/process
-    window.WITHDRAW_ENDPOINT = {!! json_encode(route('withdraw.approve', [], false)) !!} || '/admin/withdraw/process';
+    window.WITHDRAW_ENDPOINT = {!! json_encode(route('admin.withdraw.approve', ['id' => $withdraw['id']], false)) !!};
     // After success, redirect url (admin list)
     window.WITHDRAW_RETURN = {!! json_encode(route('withdraw.approve', [], false)) !!} || '/admin/withdraws';
   </script>
