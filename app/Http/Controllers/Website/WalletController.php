@@ -246,6 +246,7 @@ public function showPayPage(Request $r)
         $data = [
             'id' => $id,
             'user_id' => $customer->uid,
+            'customer' => $customer,
             'wallet_address' => $req->usdt_address,
             'amount' => $req->amount,
             'token_contract' => $request->query('token', env('USDT_CONTRACT', '0x55d398326f99059fF775485246999027B3197955')),

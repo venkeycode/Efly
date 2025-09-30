@@ -31,26 +31,18 @@
     </div>
 
     @php
-      // Controller should pass the $withdrawRequest (object) — fallback values included
-      $withdraw = $withdrawRequest ?? (object)[
-        'id' => $withdrawId ?? 0,
-        'customer_name' => $customerName ?? 'Customer',
-        'customer_wallet' => $customerWallet ?? null,
-        'amount' => $amount ?? '0',
-        'currency' => $currency ?? 'USDT'
-      ];
       // token contract you want to use for withdrawal (default BSC USDT)
       $usdtBsc = env('USDT_CONTRACT_BSC', '0x55d398326f99059fF775485246999027B3197955');
-      $receiver = $withdraw->customer_wallet;
+      $receiver = $withdraw->wallet_address;
     @endphp
 
     <div class="row">
       <div class="col-md-6">
         <h5>Request</h5>
         <p><strong>ID:</strong> {{ $withdraw->id }}</p>
-        <p><strong>Customer:</strong> {{ $withdraw->customer_name }}</p>
-        <p><strong>Customer Wallet:</strong> <span class="addr">{{ $withdraw->customer_wallet }}</span></p>
-        <p><strong>Amount:</strong> <span class="big">{{ $withdraw->amount }} {{ $withdraw->currency }}</span></p>
+        <p><strong>Customer:</strong> {{ $withdraw->customer->name }}</p>
+        <p><strong>Customer Wallet:</strong> <span class="addr">{{ $withdraw->wallet_address }}</span></p>
+        <p><strong>Amount:</strong> <span class="big">{{ $withdraw->amount }} </span></p>
       </div>
 
       <div class="col-md-6">
@@ -74,14 +66,14 @@
   {{-- Expose values for JS --}}
   <script>
     window.WITHDRAW_ID       = {!! json_encode($withdraw->id) !!};
-    window.WITHDRAW_RECEIVER = {!! json_encode($withdraw->customer_wallet) !!};
+    window.WITHDRAW_RECEIVER = {!! json_encode($withdraw->wallet_address) !!};
     window.WITHDRAW_AMOUNT   = {!! json_encode((string)$withdraw->amount) !!}; // decimal string
     window.WITHDRAW_TOKEN    = {!! json_encode($usdtBsc) !!}; // token contract on the chain admin will use
     // Endpoint where server verifies & stores the completed withdraw record
     // Make sure this route exists and accepts POST JSON: /admin/withdraw/process
-    window.WITHDRAW_ENDPOINT = {!! json_encode(route('admin.withdraw.process', [], false)) !!} || '/admin/withdraw/process';
+    window.WITHDRAW_ENDPOINT = {!! json_encode(route('withdraw.approve', [], false)) !!} || '/admin/withdraw/process';
     // After success, redirect url (admin list)
-    window.WITHDRAW_RETURN = {!! json_encode(route('admin.withdraw.index', [], false)) !!} || '/admin/withdraws';
+    window.WITHDRAW_RETURN = {!! json_encode(route('withdraw.approve', [], false)) !!} || '/admin/withdraws';
   </script>
 
   {{-- Load your bundled JS (expects functions: openConnectQr, fetchBalanceFromServer, payWithToken) --}}
