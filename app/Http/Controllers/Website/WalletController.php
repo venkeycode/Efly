@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use App\Models\Customer;
 use Illuminate\Support\Facades\Http;
 use App\Models\RequestAmount;
+use App\Models\Product;
 
 class WalletController extends Controller
 {
@@ -225,8 +226,10 @@ public function getBalance(Request $request, $address)
 public function showPayPage(Request $r)
 {
     $userId = $r->query('user_id');
-    $amount = $r->query('amount');
     $plan_id = $r->query('plan_id');
+    $product = Product::find($plan_id);
+    $amount = $product->amount;
+
     $return = 'https://earnnfly.com/New/user/index.php/nowpayments/response';//$r->query('return');
 
     $savedWallet = DB::table('customdetails')

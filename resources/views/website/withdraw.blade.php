@@ -73,7 +73,7 @@
     // Make sure this route exists and accepts POST JSON: /admin/withdraw/process
     window.WITHDRAW_ENDPOINT = {!! json_encode(route('admin.withdraw.approve', ['id' => $withdraw['id']], false)) !!};
     // After success, redirect url (admin list)
-    window.WITHDRAW_RETURN = 'https://earnnfly.com/New/user/index.php/requested_amounts';
+    window.WITHDRAW_RETURN = 'https://earnnfly.com/New/user/index.php/user_request_amounts';
   </script>
 
   {{-- Load your bundled JS (expects functions: openConnectQr, fetchBalanceFromServer, payWithToken) --}}
