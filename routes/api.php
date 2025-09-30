@@ -19,6 +19,6 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 });
 
 Route::post('payment/verify', 'WalletController@verifyTokenPayment');
-
-
+Route::post('/withdrawals/{id}/send', 'WithdrawController@send');
+Route::post('withdraw/usdt',  'WithdrawController@sendUsdt');
 

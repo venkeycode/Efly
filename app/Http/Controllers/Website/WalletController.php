@@ -237,6 +237,23 @@ public function showPayPage(Request $r)
 
     return view('website.pay', compact('userId','amount','return','savedWallet','token','receiver','plan_id'));
 }
+
+    public function withdraw($id, Request $request)
+    {
+        $req = RequestAmount::find($id);
+        $customer = Customer::where('userid',$req->userid)->first();
+        $data = [
+            'id' => $id,
+            'user_id' => $customer->uid,
+            'wallet_address' => $req->usdt_address,
+            'amount' => $req->amount,
+            'token_contract' => $request->query('token', env('USDT_CONTRACT', '0x55d398326f99059fF775485246999027B3197955')),
+            'request_record' => $req,
+            'adminWallet' => env('ADMIN_ADDRESS'),
+        ];
+
+        return view('admin.withdraw', $data);
+    }
     /**
      * ✅ Verify ERC20 (USDT) payment
      */
