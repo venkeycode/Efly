@@ -9,6 +9,8 @@ use App\Models\Customer;
 use Illuminate\Support\Facades\Http;
 use App\Models\CryptoPayment;
 use App\Models\CryptoPayout;
+use Validator;
+
 class WalletController extends Controller
 {
 
