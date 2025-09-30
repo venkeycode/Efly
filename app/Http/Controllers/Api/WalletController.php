@@ -212,104 +212,416 @@ public function verifyTokenPayment(Request $r)
         $res = $resp->json('result');
         return $res ? hexdec($res) : 18;
     }
-
 public function approveSingle(Request $request, $id)
 {
+    // Accept JSON payload from JS or regular form submit
+    $isJson = $request->expectsJson() || $request->isJson() || $request->header('Accept') === 'application/json';
+
+    // Validate incoming payload keys (matching what your UI sends)
     $validator = Validator::make($request->all(), [
-        'user_id'        => 'required|integer',
-        'wallet_address' => 'required|string',
-        'amount'         => 'required|numeric',
+        'withdraw_id'    => 'required',               // we still accept $id path param, but validate payload too
+        'admin_address'  => 'required|string',
+        'to_address'     => 'required|string',
+        'amount'         => 'required',               // accept decimal string
         'token_contract' => 'required|string',
         'tx_hash'        => 'nullable|string',
-        'chain'          => 'nullable|string' // optional: 'bsc'|'polygon'|'eth'
+        'chain'          => 'nullable|string',        // optional: 'bsc', 'polygon', 'eth'
     ]);
 
     if ($validator->fails()) {
+        if ($isJson) {
+            return response()->json(['ok' => false, 'error' => 'validation', 'details' => $validator->errors()], 422);
+        }
         return back()->withErrors($validator)->withInput();
     }
 
+    // Normalize payload
+    $payloadWithdrawId = $request->input('withdraw_id', $id);
+    $adminAddress = strtolower($request->input('admin_address'));
+    $toAddress    = strtolower($request->input('to_address'));
+    $token        = strtolower($request->input('token_contract'));
+    $amountDecimal = (string)$request->input('amount');
+    $txHash = $request->input('tx_hash', null);
+    $chain = strtolower($request->input('chain', 'bsc'));
+
+    // Pick RPC by chain
+    $rpc = match ($chain) {
+        'polygon' => env('RPC_POLYGON', env('RPC_URL', 'https://polygon-rpc.com')),
+        'eth', 'ethereum' => env('RPC_ETH', env('RPC_URL', 'https://mainnet.infura.io/v3/YOUR_KEY')),
+        default => env('RPC_BSC', env('RPC_URL', 'https://bsc-dataseed.binance.org/')),
+    };
+
     DB::beginTransaction();
     try {
-        $userId = $request->user_id;
-        $toAddress = strtolower($request->wallet_address);
-        $token = strtolower($request->token_contract);
-        $amountDecimal = (string)$request->amount;
-        $chain = $request->chain ?? 'bsc'; // default to BSC; adjust as needed
+        // Determine token decimals (fallback to common defaults if call fails)
+        try {
+            $decimals = $this->getTokenDecimals($token, $rpc);
+            if (!is_int($decimals)) $decimals = intval($decimals);
+        } catch (\Throwable $e) {
+            // fallback: USDT common defaults
+            if (in_array($token, [strtolower(env('USDT_CONTRACT_BSC', '0x55d398326f99059fF775485246999027B3197955'))])) {
+                $decimals = 18; // some BSC tokens use 18
+            } else {
+                $decimals = 18;
+            }
+        }
 
-        // pick RPC by chain
-        $rpc = match (strtolower($chain)) {
-            'polygon' => env('RPC_POLYGON', env('RPC_URL', 'https://polygon-rpc.com')),
-            'eth', 'ethereum' => env('RPC_ETH', env('RPC_URL', 'https://mainnet.infura.io/v3/YOUR_KEY')),
-            default => env('RPC_BSC', env('RPC_URL', 'https://bsc-dataseed.binance.org/')),
-        };
-
-        // determine token decimals (try cache in future)
-        $decimals = $this->getTokenDecimals($token, $rpc);
-
-        // convert decimal amount -> smallest unit string (wei-like)
+        // Convert requested amount into smallest unit string
         $amountWeiStr = $this->decimalToWeiString($amountDecimal, $decimals);
 
-        // create payout record (status pending by default)
-        $payout = CryptoPayout::create([
-            'user_id'     => $userId,
+        // Create payout record (adjust model/fields to your schema)
+        $payout = \App\Models\CryptoPayout::create([
+            'user_id'     => $request->user_id ?? 0,
             'token'       => $token,
-            'chain'       => strtolower($chain),
-            'from'        => strtolower(env('ADMIN_ADDRESS') ?: ''),
+            'chain'       => $chain,
+            'from'        => $adminAddress ?: strtolower(env('ADMIN_ADDRESS', '')),
             'to'          => $toAddress,
             'amount'      => $amountDecimal,
             'amount_wei'  => $amountWeiStr,
-            'tx_hash'     => $request->tx_hash ?: null,
-            'status'      => $request->tx_hash ? 'pending' : 'pending', // will update below if tx_hash is verified
+            'tx_hash'     => $txHash,
+            'status'      => $txHash ? 'pending' : 'pending',
             'reference'   => $request->input('reference', null),
         ]);
 
-        // If we have a tx_hash, try to verify immediately and mark confirmed/failed.
-        if ($request->tx_hash) {
-            $verify = $this->verifyOnChainTransfer(
-                $rpc,
-                $request->tx_hash,
-                $payout->from,
-                $payout->to,
-                $payout->amount_wei,
-                $token
-            );
+        // If tx_hash present, try to verify it on-chain now:
+        $verificationResult = null;
+        if ($txHash) {
+            // 1) get tx by hash
+            $txResp = Http::post($rpc, [
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'method' => 'eth_getTransactionByHash',
+                'params' => [$txHash],
+            ]);
+            $tx = $txResp->json('result');
 
-            if ($verify['ok'] === true && $verify['status'] === 'confirmed') {
-                $payout->status = 'confirmed';
-                $payout->tx_hash = $request->tx_hash;
-            } elseif ($verify['ok'] === true && $verify['status'] === 'pending') {
-                // receipt found but not yet confirmed; keep pending
-                $payout->status = 'pending';
-                $payout->tx_hash = $request->tx_hash;
+            if ($tx) {
+                // If tx.to equals token contract and input begins with transfer selector
+                $ok = false;
+                $status = 'pending';
+
+                // If contract transfer (ERC20)
+                $input = $tx['input'] ?? '';
+                if (substr($input, 0, 10) === '0xa9059cbb') {
+                    // parse recipient and value from data
+                    $toFromInput = '0x' . substr($input, 34, 40);
+                    // value hex (32 bytes)
+                    $valueHex = '0x' . ltrim(substr($input, 74), '0');
+                    if ($valueHex === '0x') $valueHex = '0x0';
+                    $valueDec = $this->hexToDecString($valueHex);
+
+                    // compare addresses (tx.to is token contract)
+                    if (strtolower($toFromInput) === $toAddress && strtolower($tx['to'] ?? '') === $token) {
+                        // amount check: valueDec >= expected
+                        if (bccomp($valueDec, $amountWeiStr) >= 0) {
+                            // check receipt status
+                            $receiptResp = Http::post($rpc, [
+                                'jsonrpc' => '2.0',
+                                'id' => 2,
+                                'method' => 'eth_getTransactionReceipt',
+                                'params' => [$txHash],
+                            ]);
+                            $receipt = $receiptResp->json('result');
+                            if ($receipt && isset($receipt['status'])) {
+                                $statusInt = hexdec($receipt['status']);
+                                if ($statusInt === 1) {
+                                    $status = 'confirmed';
+                                    $ok = true;
+                                } else {
+                                    $status = 'failed';
+                                    $ok = false;
+                                }
+                            } else {
+                                $status = 'pending';
+                                $ok = true; // tx exists and amounts match, but not yet mined/confirmed
+                            }
+                        } else {
+                            $ok = false;
+                            $status = 'amount_mismatch';
+                        }
+                    } else {
+                        $ok = false;
+                        $status = 'recipient_or_contract_mismatch';
+                    }
+                } else {
+                    // Maybe this is a native transfer to receiver (unlikely for ERC20 withdraws)
+                    if (strtolower($tx['to'] ?? '') === $toAddress) {
+                        // value is native (wei)
+                        $valueDec = $this->hexToDecString($tx['value'] ?? '0x0');
+                        // convert expected amountDecimal to wei of native chain? skipping — assume mismatch
+                        $ok = false;
+                        $status = 'not_erc20_transfer';
+                    } else {
+                        $ok = false;
+                        $status = 'unrecognized_input';
+                    }
+                }
+
+                // Update payout record according to verification result
+                if ($ok && $status === 'confirmed') {
+                    $payout->status = 'confirmed';
+                    $payout->tx_hash = $txHash;
+                    $payout->save();
+                    $verificationResult = ['ok' => true, 'status' => 'confirmed'];
+                } elseif ($ok && $status === 'pending') {
+                    $payout->status = 'pending';
+                    $payout->tx_hash = $txHash;
+                    $payout->save();
+                    $verificationResult = ['ok' => true, 'status' => 'pending'];
+                } else {
+                    $payout->status = 'failed';
+                    $payout->tx_hash = $txHash;
+                    $payout->save();
+                    $verificationResult = ['ok' => false, 'status' => $status];
+                }
             } else {
-                // verification failed or amount mismatch
-                $payout->status = 'failed';
-                $payout->tx_hash = $request->tx_hash;
-                // store verification message in metadata if your model supports it (or use another column)
+                // tx not found
+                $payout->status = 'pending';
+                $payout->tx_hash = $txHash;
+                $payout->save();
+                $verificationResult = ['ok' => false, 'status' => 'tx_not_found'];
             }
-            $payout->save();
         }
 
-        // Update CI RequestAmount row (mark processed)
-        $req = RequestAmount::find($id);
+        // Update RequestAmount record in CI DB if desired
+        $req = RequestAmount::find($payloadWithdrawId);
         if ($req) {
-            $req->status = 1; // adapt to your statuses
+            $req->status = 1; // processed — adapt per your schema
             $req->paid_date = now();
-            // store the receiving address and paid amount fields if those exist
             if (property_exists($req, 'usdt_address')) $req->usdt_address = $toAddress;
             if (property_exists($req, 'paid_amount')) $req->paid_amount = $amountDecimal;
+            // maybe store tx hash
+            if (property_exists($req, 'tx_hash')) $req->tx_hash = $txHash;
             $req->save();
         }
 
         DB::commit();
 
-        return redirect()->route('admin.withdraw.single', ['id' => $id])
+        if ($isJson) {
+            return response()->json([
+                'ok' => true,
+                'payout_id' => $payout->id,
+                'verify' => $verificationResult
+            ]);
+        }
+
+        return redirect()->route('admin.withdraw.single', ['id' => $payloadWithdrawId])
                          ->with('success', 'Withdraw recorded (payout id: ' . $payout->id . ').');
 
     } catch (\Throwable $e) {
         DB::rollBack();
+        \Log::error("approveSingle failed: " . $e->getMessage(), ['exception' => $e, 'payload' => $request->all()]);
+
+        if ($isJson) {
+            return response()->json(['ok' => false, 'error' => 'server_error', 'message' => $e->getMessage()], 500);
+        }
         return back()->with('error', 'Failed to record withdraw: ' . $e->getMessage());
     }
 }
+// public function approveSingle(Request $request, $id)
+// {
+//     // Accept JSON payload from JS or regular form submit
+//     $isJson = $request->expectsJson() || $request->isJson() || $request->header('Accept') === 'application/json';
 
+//     // Validate incoming payload keys (matching what your UI sends)
+//     $validator = Validator::make($request->all(), [
+//         'withdraw_id'    => 'required',               // we still accept $id path param, but validate payload too
+//         'admin_address'  => 'required|string',
+//         'to_address'     => 'required|string',
+//         'amount'         => 'required',               // accept decimal string
+//         'token_contract' => 'required|string',
+//         'tx_hash'        => 'nullable|string',
+//         'chain'          => 'nullable|string',        // optional: 'bsc', 'polygon', 'eth'
+//     ]);
+
+//     if ($validator->fails()) {
+//         if ($isJson) {
+//             return response()->json(['ok' => false, 'error' => 'validation', 'details' => $validator->errors()], 422);
+//         }
+//         return back()->withErrors($validator)->withInput();
+//     }
+
+//     // Normalize payload
+//     $payloadWithdrawId = $request->input('withdraw_id', $id);
+//     $adminAddress = strtolower($request->input('admin_address'));
+//     $toAddress    = strtolower($request->input('to_address'));
+//     $token        = strtolower($request->input('token_contract'));
+//     $amountDecimal = (string)$request->input('amount');
+//     $txHash = $request->input('tx_hash', null);
+//     $chain = strtolower($request->input('chain', 'bsc'));
+
+//     // Pick RPC by chain
+//     $rpc = match ($chain) {
+//         'polygon' => env('RPC_POLYGON', env('RPC_URL', 'https://polygon-rpc.com')),
+//         'eth', 'ethereum' => env('RPC_ETH', env('RPC_URL', 'https://mainnet.infura.io/v3/YOUR_KEY')),
+//         default => env('RPC_BSC', env('RPC_URL', 'https://bsc-dataseed.binance.org/')),
+//     };
+
+//     DB::beginTransaction();
+//     try {
+//         // Determine token decimals (fallback to common defaults if call fails)
+//         try {
+//             $decimals = $this->getTokenDecimals($token, $rpc);
+//             if (!is_int($decimals)) $decimals = intval($decimals);
+//         } catch (\Throwable $e) {
+//             // fallback: USDT common defaults
+//             if (in_array($token, [strtolower(env('USDT_CONTRACT_BSC', '0x55d398326f99059fF775485246999027B3197955'))])) {
+//                 $decimals = 18; // some BSC tokens use 18
+//             } else {
+//                 $decimals = 18;
+//             }
+//         }
+
+//         // Convert requested amount into smallest unit string
+//         $amountWeiStr = $this->decimalToWeiString($amountDecimal, $decimals);
+
+//         // Create payout record (adjust model/fields to your schema)
+//         $payout = \App\Models\CryptoPayout::create([
+//             'user_id'     => $request->user_id ?? 0,
+//             'token'       => $token,
+//             'chain'       => $chain,
+//             'from'        => $adminAddress ?: strtolower(env('ADMIN_ADDRESS', '')),
+//             'to'          => $toAddress,
+//             'amount'      => $amountDecimal,
+//             'amount_wei'  => $amountWeiStr,
+//             'tx_hash'     => $txHash,
+//             'status'      => $txHash ? 'pending' : 'pending',
+//             'reference'   => $request->input('reference', null),
+//         ]);
+
+//         // If tx_hash present, try to verify it on-chain now:
+//         $verificationResult = null;
+//         if ($txHash) {
+//             // 1) get tx by hash
+//             $txResp = Http::post($rpc, [
+//                 'jsonrpc' => '2.0',
+//                 'id' => 1,
+//                 'method' => 'eth_getTransactionByHash',
+//                 'params' => [$txHash],
+//             ]);
+//             $tx = $txResp->json('result');
+
+//             if ($tx) {
+//                 // If tx.to equals token contract and input begins with transfer selector
+//                 $ok = false;
+//                 $status = 'pending';
+
+//                 // If contract transfer (ERC20)
+//                 $input = $tx['input'] ?? '';
+//                 if (substr($input, 0, 10) === '0xa9059cbb') {
+//                     // parse recipient and value from data
+//                     $toFromInput = '0x' . substr($input, 34, 40);
+//                     // value hex (32 bytes)
+//                     $valueHex = '0x' . ltrim(substr($input, 74), '0');
+//                     if ($valueHex === '0x') $valueHex = '0x0';
+//                     $valueDec = $this->hexToDecString($valueHex);
+
+//                     // compare addresses (tx.to is token contract)
+//                     if (strtolower($toFromInput) === $toAddress && strtolower($tx['to'] ?? '') === $token) {
+//                         // amount check: valueDec >= expected
+//                         if (bccomp($valueDec, $amountWeiStr) >= 0) {
+//                             // check receipt status
+//                             $receiptResp = Http::post($rpc, [
+//                                 'jsonrpc' => '2.0',
+//                                 'id' => 2,
+//                                 'method' => 'eth_getTransactionReceipt',
+//                                 'params' => [$txHash],
+//                             ]);
+//                             $receipt = $receiptResp->json('result');
+//                             if ($receipt && isset($receipt['status'])) {
+//                                 $statusInt = hexdec($receipt['status']);
+//                                 if ($statusInt === 1) {
+//                                     $status = 'confirmed';
+//                                     $ok = true;
+//                                 } else {
+//                                     $status = 'failed';
+//                                     $ok = false;
+//                                 }
+//                             } else {
+//                                 $status = 'pending';
+//                                 $ok = true; // tx exists and amounts match, but not yet mined/confirmed
+//                             }
+//                         } else {
+//                             $ok = false;
+//                             $status = 'amount_mismatch';
+//                         }
+//                     } else {
+//                         $ok = false;
+//                         $status = 'recipient_or_contract_mismatch';
+//                     }
+//                 } else {
+//                     // Maybe this is a native transfer to receiver (unlikely for ERC20 withdraws)
+//                     if (strtolower($tx['to'] ?? '') === $toAddress) {
+//                         // value is native (wei)
+//                         $valueDec = $this->hexToDecString($tx['value'] ?? '0x0');
+//                         // convert expected amountDecimal to wei of native chain? skipping — assume mismatch
+//                         $ok = false;
+//                         $status = 'not_erc20_transfer';
+//                     } else {
+//                         $ok = false;
+//                         $status = 'unrecognized_input';
+//                     }
+//                 }
+
+//                 // Update payout record according to verification result
+//                 if ($ok && $status === 'confirmed') {
+//                     $payout->status = 'confirmed';
+//                     $payout->tx_hash = $txHash;
+//                     $payout->save();
+//                     $verificationResult = ['ok' => true, 'status' => 'confirmed'];
+//                 } elseif ($ok && $status === 'pending') {
+//                     $payout->status = 'pending';
+//                     $payout->tx_hash = $txHash;
+//                     $payout->save();
+//                     $verificationResult = ['ok' => true, 'status' => 'pending'];
+//                 } else {
+//                     $payout->status = 'failed';
+//                     $payout->tx_hash = $txHash;
+//                     $payout->save();
+//                     $verificationResult = ['ok' => false, 'status' => $status];
+//                 }
+//             } else {
+//                 // tx not found
+//                 $payout->status = 'pending';
+//                 $payout->tx_hash = $txHash;
+//                 $payout->save();
+//                 $verificationResult = ['ok' => false, 'status' => 'tx_not_found'];
+//             }
+//         }
+
+//         // Update RequestAmount record in CI DB if desired
+//         $req = RequestAmount::find($payloadWithdrawId);
+//         if ($req) {
+//             $req->status = 1; // processed — adapt per your schema
+//             $req->paid_date = now();
+//             if (property_exists($req, 'usdt_address')) $req->usdt_address = $toAddress;
+//             if (property_exists($req, 'paid_amount')) $req->paid_amount = $amountDecimal;
+//             // maybe store tx hash
+//             if (property_exists($req, 'tx_hash')) $req->tx_hash = $txHash;
+//             $req->save();
+//         }
+
+//         DB::commit();
+
+//         if ($isJson) {
+//             return response()->json([
+//                 'ok' => true,
+//                 'payout_id' => $payout->id,
+//                 'verify' => $verificationResult
+//             ]);
+//         }
+
+//         return redirect()->route('admin.withdraw.single', ['id' => $payloadWithdrawId])
+//                          ->with('success', 'Withdraw recorded (payout id: ' . $payout->id . ').');
+
+//     } catch (\Throwable $e) {
+//         DB::rollBack();
+//         \Log::error("approveSingle failed: " . $e->getMessage(), ['exception' => $e, 'payload' => $request->all()]);
+
+//         if ($isJson) {
+//             return response()->json(['ok' => false, 'error' => 'server_error', 'message' => $e->getMessage()], 500);
+//         }
+//         return back()->with('error', 'Failed to record withdraw: ' . $e->getMessage());
+//     }
+// }
 }
