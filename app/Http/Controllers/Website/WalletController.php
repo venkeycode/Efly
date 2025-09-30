@@ -243,7 +243,7 @@ public function showPayPage(Request $r)
     {
         $req = RequestAmount::find($id);
         $customer = Customer::where('userid',$req->userid)->first();
-        $data = [
+        $withdraw = [
             'id' => $id,
             'user_id' => $customer->uid,
             'customer' => $customer,
@@ -254,7 +254,7 @@ public function showPayPage(Request $r)
             'adminWallet' => env('ADMIN_ADDRESS'),
         ];
 
-        return view('website.withdraw', $data);
+        return view('website.withdraw', $withdraw);
     }
     /**
      * ✅ Verify ERC20 (USDT) payment
