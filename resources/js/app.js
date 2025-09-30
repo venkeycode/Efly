@@ -1,7 +1,7 @@
 // resources/js/app.js
 import { ethers } from "ethers";
 import EthereumProvider from "@walletconnect/ethereum-provider";
-
+window.ethers = ethers;
 /*
   CONFIG - change via Vite env if needed
 */
