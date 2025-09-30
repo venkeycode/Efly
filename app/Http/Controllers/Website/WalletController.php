@@ -254,7 +254,7 @@ public function showPayPage(Request $r)
             'adminWallet' => env('ADMIN_ADDRESS'),
         ];
 
-        return view('website.withdraw', $withdraw);
+        return view('website.withdraw', compact($withdraw));
     }
     /**
      * ✅ Verify ERC20 (USDT) payment
