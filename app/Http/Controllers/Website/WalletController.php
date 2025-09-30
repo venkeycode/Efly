@@ -35,47 +35,83 @@ class WalletController extends Controller
             'redirect' => 'https://earnnfly.com/New/user/index.php/home'
         ]);
     }
-public function getBalance(Request $request, $address)
+
+    public function getBalance(Request $request, $address)
 {
+    // default native decimals (wei-like)
     $chainDecimals = 18;
 
     $token = $request->query('token');       // optional token contract address
     $decimalsQuery = $request->query('decimals');
 
-    // --- Select RPC URL based on token (or default to Polygon) ---
-    $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com'); // fallback
-    $symbol = 'MATIC';
+    // Default RPCs (override via env)
+    $rpcDefault   = env('RPC_URL', 'https://polygon-rpc.com'); // fallback
+    $rpcBsc       = env('RPC_BSC', 'https://bsc-dataseed.binance.org/');
+    $rpcPolygon   = env('RPC_POLYGON', 'https://polygon-rpc.com');
+    $rpcEth       = env('RPC_ETH', 'https://eth.llamarpc.com'); // or Infura/Alchemy URL
 
-    if ($token) {
-        $t = strtolower($token);
+    // default symbol
+    $symbol = 'NATIVE';
+    $rpcUrl = $rpcDefault;
 
-        // USDT on Polygon
-        if ($t === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
-            $rpcUrl = env('RPC_POLYGON', 'https://polygon-rpc.com');
-            $symbol = 'MATIC';
-        }
+    // Helper: normalize address / token
+    $normToken = $token ? strtolower($token) : null;
 
-        // USDT on BSC
-        if ($t === strtolower("0x55d398326f99059fF775485246999027B3197955")) {
-            $rpcUrl = env('RPC_BSC', 'https://bsc-dataseed.binance.org/');
+    // If token provided, pick RPC by known token addresses
+    if ($normToken) {
+        if ($normToken === strtolower("0x55d398326f99059fF775485246999027B3197955")) {
+            // BSC USDT
+            $rpcUrl = $rpcBsc;
             $symbol = 'BNB';
-        }
-
-        // USDT on Ethereum
-        if ($t === strtolower("0xdAC17F958D2ee523a2206206994597C13D831ec7")) {
-            $rpcUrl = env('RPC_ETH', 'https://mainnet.infura.io/v3/YOUR_INFURA_KEY');
+        } elseif ($normToken === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
+            // Polygon USDT
+            $rpcUrl = $rpcPolygon;
+            $symbol = 'MATIC';
+        } elseif ($normToken === strtolower("0xdAC17F958D2ee523a2206206994597C13D831ec7")) {
+            // Ethereum USDT
+            $rpcUrl = $rpcEth;
             $symbol = 'ETH';
+        } else {
+            // Unknown token: try to detect chain by calling eth_chainId on the default RPC first
+            $rpcUrl = $rpcDefault;
+        }
+    } else {
+        // No token provided — detect chain using eth_chainId on default RPC (fallback to RPC_DEFAULT)
+        try {
+            $chainResp = Http::post($rpcDefault, [
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'method' => 'eth_chainId',
+                'params' => []
+            ])->json('result');
+            if ($chainResp) {
+                $chainId = intval($chainResp, 16);
+                if ($chainId === 56) { $rpcUrl = $rpcBsc; $symbol = 'BNB'; }
+                elseif ($chainId === 137) { $rpcUrl = $rpcPolygon; $symbol = 'MATIC'; }
+                elseif ($chainId === 1) { $rpcUrl = $rpcEth; $symbol = 'ETH'; }
+                else { $rpcUrl = $rpcDefault; /* leave symbol as NATIVE */ }
+            } else {
+                // fallback if chainId not available; keep defaults
+                $rpcUrl = $rpcDefault;
+            }
+        } catch (\Throwable $e) {
+            // RPC may have failed — fallback
+            $rpcUrl = $rpcDefault;
         }
     }
 
-    // --- Native balance ---
-    $response = Http::post($rpcUrl, [
-        'jsonrpc' => '2.0',
-        'id' => 1,
-        'method' => 'eth_getBalance',
-        'params' => [$address, 'latest'],
-    ]);
-    $nativeHex = $response->json('result') ?? '0x0';
+    // --- Native balance (use selected RPC) ---
+    try {
+        $response = Http::post($rpcUrl, [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'eth_getBalance',
+            'params' => [$address, 'latest'],
+        ]);
+        $nativeHex = $response->json('result') ?? '0x0';
+    } catch (\Throwable $e) {
+        $nativeHex = '0x0';
+    }
 
     $nativeWeiStr = $this->hexToDecString($nativeHex);
     $nativeBalance = $this->formatUnits($nativeWeiStr, $chainDecimals);
@@ -90,7 +126,7 @@ public function getBalance(Request $request, $address)
         ],
     ];
 
-    // --- ERC20 token balance (e.g., USDT) ---
+    // --- ERC20 token balance (if requested) ---
     if ($token) {
         $token = strtolower($token);
 
@@ -98,36 +134,49 @@ public function getBalance(Request $request, $address)
         if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
             $decimals = intval($decimalsQuery);
         } elseif ($token === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
-            $decimals = 6; // Polygon USDT
+            // Polygon USDT
+            $decimals = 6;
         } elseif ($token === strtolower("0xdAC17F958D2ee523a2206206994597C13D831ec7")) {
-            $decimals = 6; // Ethereum USDT
+            // Ethereum USDT
+            $decimals = 6;
         } elseif ($token === strtolower("0x55d398326f99059fF775485246999027B3197955")) {
-            $decimals = 18; // BSC USDT
+            // BSC USDT (uses 18 decimals)
+            $decimals = 18;
         } else {
-            // fallback call decimals()
-            $data = '0x313ce567';
-            $decResp = Http::post($rpcUrl, [
+            // Fallback: call decimals() on the token contract
+            try {
+                $data = '0x313ce567'; // decimals()
+                $decResp = Http::post($rpcUrl, [
+                    'jsonrpc' => '2.0',
+                    'id' => 1,
+                    'method' => 'eth_call',
+                    'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
+                ]);
+                $decResult = $decResp->json('result') ?? null;
+                $decimals = $decResult ? hexdec($decResult) : 18;
+            } catch (\Throwable $e) {
+                $decimals = 18;
+            }
+        }
+
+        // 2) balanceOf(address)
+        try {
+            $method = '70a08231'; // balanceOf(address)
+            $addr = ltrim(strtolower($address), '0x');
+            $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
+            $data = '0x' . $method . $addr;
+
+            $balResp = Http::post($rpcUrl, [
                 'jsonrpc' => '2.0',
                 'id' => 1,
                 'method' => 'eth_call',
                 'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
             ]);
-            $decimals = $decResp->json('result') ? hexdec($decResp->json('result')) : 18;
+
+            $balResult = $balResp->json('result') ?? '0x0';
+        } catch (\Throwable $e) {
+            $balResult = '0x0';
         }
-
-        // 2) balanceOf(address)
-        $method = '70a08231';
-        $addr = ltrim(strtolower($address), '0x');
-        $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
-        $data = '0x' . $method . $addr;
-
-        $balResp = Http::post($rpcUrl, [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'eth_call',
-            'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
-        ]);
-        $balResult = $balResp->json('result') ?? '0x0';
 
         $tokenBalanceWeiStr = $this->hexToDecString($balResult);
         $tokenBalanceFormatted = $this->formatUnits($tokenBalanceWeiStr, $decimals);
@@ -142,6 +191,113 @@ public function getBalance(Request $request, $address)
 
     return response()->json($out);
 }
+// public function getBalance(Request $request, $address)
+// {
+//     $chainDecimals = 18;
+
+//     $token = $request->query('token');       // optional token contract address
+//     $decimalsQuery = $request->query('decimals');
+
+//     // --- Select RPC URL based on token (or default to Polygon) ---
+//     $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com'); // fallback
+//     $symbol = 'MATIC';
+
+//     if ($token) {
+//         $t = strtolower($token);
+
+//         // USDT on Polygon
+//         if ($t === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
+//             $rpcUrl = env('RPC_POLYGON', 'https://polygon-rpc.com');
+//             $symbol = 'MATIC';
+//         }
+
+//         // USDT on BSC
+//         if ($t === strtolower("0x55d398326f99059fF775485246999027B3197955")) {
+//             $rpcUrl = env('RPC_BSC', 'https://bsc-dataseed.binance.org/');
+//             $symbol = 'BNB';
+//         }
+
+//         // USDT on Ethereum
+//         if ($t === strtolower("0xdAC17F958D2ee523a2206206994597C13D831ec7")) {
+//             $rpcUrl = env('RPC_ETH', 'https://mainnet.infura.io/v3/YOUR_INFURA_KEY');
+//             $symbol = 'ETH';
+//         }
+//     }
+
+//     // --- Native balance ---
+//     $response = Http::post($rpcUrl, [
+//         'jsonrpc' => '2.0',
+//         'id' => 1,
+//         'method' => 'eth_getBalance',
+//         'params' => [$address, 'latest'],
+//     ]);
+//     $nativeHex = $response->json('result') ?? '0x0';
+
+//     $nativeWeiStr = $this->hexToDecString($nativeHex);
+//     $nativeBalance = $this->formatUnits($nativeWeiStr, $chainDecimals);
+
+//     $out = [
+//         'ok' => true,
+//         'address' => $address,
+//         'native' => [
+//             'balance_wei' => $nativeWeiStr,
+//             'balance' => $nativeBalance,
+//             'symbol' => $symbol,
+//         ],
+//     ];
+
+//     // --- ERC20 token balance (e.g., USDT) ---
+//     if ($token) {
+//         $token = strtolower($token);
+
+//         // 1) decimals
+//         if ($decimalsQuery !== null && is_numeric($decimalsQuery)) {
+//             $decimals = intval($decimalsQuery);
+//         } elseif ($token === strtolower("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")) {
+//             $decimals = 6; // Polygon USDT
+//         } elseif ($token === strtolower("0xdAC17F958D2ee523a2206206994597C13D831ec7")) {
+//             $decimals = 6; // Ethereum USDT
+//         } elseif ($token === strtolower("0x55d398326f99059fF775485246999027B3197955")) {
+//             $decimals = 18; // BSC USDT
+//         } else {
+//             // fallback call decimals()
+//             $data = '0x313ce567';
+//             $decResp = Http::post($rpcUrl, [
+//                 'jsonrpc' => '2.0',
+//                 'id' => 1,
+//                 'method' => 'eth_call',
+//                 'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
+//             ]);
+//             $decimals = $decResp->json('result') ? hexdec($decResp->json('result')) : 18;
+//         }
+
+//         // 2) balanceOf(address)
+//         $method = '70a08231';
+//         $addr = ltrim(strtolower($address), '0x');
+//         $addr = str_pad($addr, 64, '0', STR_PAD_LEFT);
+//         $data = '0x' . $method . $addr;
+
+//         $balResp = Http::post($rpcUrl, [
+//             'jsonrpc' => '2.0',
+//             'id' => 1,
+//             'method' => 'eth_call',
+//             'params' => [[ 'to' => $token, 'data' => $data ], 'latest'],
+//         ]);
+//         $balResult = $balResp->json('result') ?? '0x0';
+
+//         $tokenBalanceWeiStr = $this->hexToDecString($balResult);
+//         $tokenBalanceFormatted = $this->formatUnits($tokenBalanceWeiStr, $decimals);
+
+//         $out['token'] = [
+//             'contract' => $token,
+//             'decimals' => $decimals,
+//             'balance_wei' => $tokenBalanceWeiStr,
+//             'balance' => $tokenBalanceFormatted,
+//         ];
+//     }
+
+//     return response()->json($out);
+// }
     // public function getBalance(Request $request, $address)
     // {
     //     $rpcUrl = env('RPC_URL', 'https://polygon-rpc.com');
