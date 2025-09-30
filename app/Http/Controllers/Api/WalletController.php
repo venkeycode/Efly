@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Http;
 use App\Models\CryptoPayment;
 use App\Models\CryptoPayout;
 use Validator;
+use App\Models\RequestAmount;
 
 class WalletController extends Controller
 {
