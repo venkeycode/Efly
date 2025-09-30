@@ -39,10 +39,10 @@
     <div class="row">
       <div class="col-md-6">
         <h5>Request</h5>
-        <p><strong>ID:</strong> {{ $withdraw->id }}</p>
-        <p><strong>Customer:</strong> {{ $withdraw->customer->name }}</p>
-        <p><strong>Customer Wallet:</strong> <span class="addr">{{ $withdraw->wallet_address }}</span></p>
-        <p><strong>Amount:</strong> <span class="big">{{ $withdraw->amount }} </span></p>
+        <p><strong>ID:</strong> {{ $withdraw['id'] }}</p>
+        <p><strong>Customer:</strong> {{ $withdraw['customer']->name }}</p>
+        <p><strong>Customer Wallet:</strong> <span class="addr">{{ $withdraw['wallet_address'] }}</span></p>
+        <p><strong>Amount:</strong> <span class="big">{{ $withdraw['amount'] }} </span></p>
       </div>
 
       <div class="col-md-6">
@@ -65,9 +65,9 @@
 
   {{-- Expose values for JS --}}
   <script>
-    window.WITHDRAW_ID       = {!! json_encode($withdraw->id) !!};
-    window.WITHDRAW_RECEIVER = {!! json_encode($withdraw->wallet_address) !!};
-    window.WITHDRAW_AMOUNT   = {!! json_encode((string)$withdraw->amount) !!}; // decimal string
+    window.WITHDRAW_ID       = {!! json_encode($withdraw['id']) !!};
+    window.WITHDRAW_RECEIVER = {!! json_encode($withdraw['wallet_address']) !!};
+    window.WITHDRAW_AMOUNT   = {!! json_encode((string) $withdraw['amount']) !!}; // decimal string
     window.WITHDRAW_TOKEN    = {!! json_encode($usdtBsc) !!}; // token contract on the chain admin will use
     // Endpoint where server verifies & stores the completed withdraw record
     // Make sure this route exists and accepts POST JSON: /admin/withdraw/process
