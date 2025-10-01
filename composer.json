@@ -11,7 +11,7 @@
         "intervention/image": "^3.11",
         "jenssegers/agent": "*",
         "kornrunner/keccak": "^1.1",
-        "kornrunner/rlp": "^0.3.6",
+        "kornrunner/rlp": "^0.3",
         "laravel/framework": "^11.31",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^2.9",

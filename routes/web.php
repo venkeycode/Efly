@@ -11,7 +11,6 @@ Route::group(['middleware' => 'cors'], function () {
     // Route::post('/wallet/withdraw/process', 'WalletController@process')->name('withdraw.approve');
     Route::get('/wallet/balance/{address}', 'WalletController@getBalance');
     Route::post('/payment/verify', 'WalletController@verifyPayment');
-
  });
 
 

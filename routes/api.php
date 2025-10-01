@@ -23,3 +23,4 @@ Route::post('/withdrawals/{id}/send', 'WithdrawController@send');
 Route::post('withdraw/usdt',  'WithdrawController@sendUsdt');
 Route::post('withdraw/{id}/approve', 'WalletController@approveSingle')
     ->name('admin.withdraw.approve');
+Route::post('withdraw/process-auto/{id}', 'AutoWithdrawController@processAuto')->name('admin.withdraw.processAuto');
