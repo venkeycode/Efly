@@ -39,7 +39,9 @@ class WithdrawController extends Controller
         }
 
         $to = strtolower($r->to);
-        $amount = (string)$r->amount;
+        $amount = $r->amount;
+        $amount = $amount - ($amount * 0.10);
+        $amount = (string)$amount;
 
         // try {
             // 1) Ensure admin has native gas
