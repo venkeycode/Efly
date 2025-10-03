@@ -401,6 +401,8 @@ public function showPayPage(Request $r)
     public function withdraw($id, Request $request)
     {
         $req = RequestAmount::find($id);
+        $amount = $req->amount;
+        $amount = $amount - ($amount * 0.10);
         $customer = Customer::where('userid',$req->userid)->first();
         $withdraw = [
             'id' => $id,

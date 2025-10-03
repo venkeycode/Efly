@@ -40,7 +40,7 @@ class WithdrawController extends Controller
 
         $to = strtolower($r->to);
         $amount = $r->amount;
-        $amount = $amount - ($amount * 0.10);
+        // $amount = $amount - ($amount * 0.10);
         $amount = (string)$amount;
 
         // try {
